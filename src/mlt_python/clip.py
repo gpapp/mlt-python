@@ -4,10 +4,13 @@ Represents a clip entry in a playlist. Clips reference producers with
 specific in/out points to define which portion of the media to use.
 """
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 from .timecode import Timecode
+
+if TYPE_CHECKING:
+    from .filter import Filter
 
 
 class Clip:
@@ -21,6 +24,7 @@ class Clip:
         in_point: Start frame within the producer
         out_point: End frame within the producer (inclusive)
         properties: Additional MLT properties for this clip entry
+        filters: List of filters attached to this clip
     """
 
     def __init__(
@@ -30,6 +34,7 @@ class Clip:
         out_point: int | None = None,
         length: int | None = None,
         properties: dict[str, str] | None = None,
+        filters: list["Filter"] | None = None,
     ) -> None:
         """Initialize a Clip.
 
@@ -40,10 +45,12 @@ class Clip:
                        use producer's full length
             length: Length in frames (alternative to out_point)
             properties: Additional MLT properties for the entry element
+            filters: Optional initial filters
         """
         self.producer_id = producer_id
         self.in_point = in_point
         self.properties: dict[str, str] = properties or {}
+        self.filters: list["Filter"] = filters or []
 
         if out_point is not None:
             self.out_point = out_point
@@ -61,6 +68,7 @@ class Clip:
         duration: str | None = None,
         fps: float = 30.0,
         properties: dict[str, str] | None = None,
+        filters: list["Filter"] | None = None,
     ) -> "Clip":
         """Create a clip using timecode format (HH:MM:SS:FF).
 
@@ -68,9 +76,10 @@ class Clip:
             producer_id: ID of the producer to reference
             start_time: Start timecode (HH:MM:SS:FF)
             end_time: End timecode (HH:MM:SS:FF), exclusive
-            duration: Duration timecode (alternative to end_time)
+            duration: Duration timecode (alternative to end)
             fps: Frames per second for timecode conversion
             properties: Additional MLT properties
+            filters: Optional initial filters
 
         Returns:
             Clip object
@@ -92,6 +101,7 @@ class Clip:
             in_point=in_point,
             out_point=out_point,
             properties=properties,
+            filters=filters,
         )
 
     def get_duration_frames(self) -> int | None:
@@ -136,6 +146,10 @@ class Clip:
         for name, value in self.properties.items():
             prop = ET.SubElement(elem, "property", {"name": name})
             prop.text = value
+
+        # Add filters
+        for filter_obj in self.filters:
+            elem.append(filter_obj.to_xml())
 
         return elem
 

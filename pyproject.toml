@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel", "setuptools-git-versioning"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mlt-xml"
+name = "mlt-python"
 version = "0.1.0"
 description = "Pure Python library for creating and modifying MLT XML files for Kdenlive"
 readme = "README.md"
