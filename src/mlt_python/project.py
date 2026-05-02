@@ -367,7 +367,32 @@ class MLTProject:
         self.transitions.append(transition)
         return transition
 
+    def get_duration_frames(self) -> int:
+        """Get the total duration of the project in frames.
+
+        Returns:
+            Total duration in frames
+        """
+        max_duration = 0
+        for playlist in self.playlists.values():
+            duration_frames = playlist.get_duration_frames()
+            max_duration = max(max_duration, duration_frames)
+        return max_duration
+
+    def get_duration_timecode(self, fps: float | None = None) -> str:
+        """Get the total duration as a timecode string.
+
+        Args:
+            fps: Optional frames per second (uses profile FPS if None)
+
+        Returns:
+            Duration in HH:MM:SS:FF format
+        """
+        fps = fps or self.profile.fps
+        return str(Timecode.from_frames(self.get_duration_frames(), fps))
+
     def _seconds_to_timestamp(self, producer: Producer, default_seconds: int) -> str:
+
         """Convert producer length to timestamp format (HH:MM:SS.mmm)."""
         length_str = producer.get_property("length", str(default_seconds * 30))
         try:
@@ -462,18 +487,16 @@ class MLTProject:
                 else:
                     root.append(producer.to_xml())
 
+        # Add playlists if not in kdenlive format
+        if not kdenlive_format:
+            for playlist in self.playlists.values():
+                root.append(playlist.to_xml(fps=self.profile.fps))
+
         # Add black color producer (required by Kdenlive as base track)
         if kdenlive_format:
-            black_out = "00:05:00.000"
-            if self.playlists:
-                from .timecode import Timecode
-                max_duration = 0
-                for playlist in self.playlists.values():
-                    duration_frames = playlist.get_duration_frames()
-                    max_duration = max(max_duration, duration_frames)
-                if max_duration > 0:
-                    black_out = Timecode.from_frames(max_duration, self.profile.fps).to_string()
+            black_out = self.get_duration_timecode() if self.playlists else "00:05:00.000"
             black_producer = ET.SubElement(root, "producer", {"id": "producer0", "in": "00:00:00.000", "out": black_out})
+
             ET.SubElement(black_producer, "property", {"name": "length"}).text = "2147483647"
             ET.SubElement(black_producer, "property", {"name": "eof"}).text = "continue"
             ET.SubElement(black_producer, "property", {"name": "resource"}).text = "black"
@@ -497,8 +520,8 @@ class MLTProject:
                 track_type_map[playlist.id] = track_type
                 playlist.properties.pop("kdenlive:track_type", None)
 
-                # Add main playlist with chain references
-                root.append(playlist.to_xml(producer_to_chain))
+                # Add main playlist with chain references and FPS
+                root.append(playlist.to_xml(producer_to_chain, fps=self.profile.fps))
                 playlist_elem = root.find(f"playlist[@id='{playlist.id}']")
                 if playlist_elem is not None and track_type == "audio":
                     prop = ET.SubElement(playlist_elem, "property", {"name": "kdenlive:audio_track"})
@@ -579,20 +602,13 @@ class MLTProject:
             # Create main sequence tractor with sequential ID
             sequence_id = f"tractor{self._tractor_counter}"
             sequence_uuid = self.sequence_uuid
-            main_tractor_out = "00:05:00.000"
-            if self.playlists:
-                from .timecode import Timecode
-                max_duration = 0
-                for playlist in self.playlists.values():
-                    duration_frames = playlist.get_duration_frames()
-                    max_duration = max(max_duration, duration_frames)
-                if max_duration > 0:
-                    main_tractor_out = Timecode.from_frames(max_duration, self.profile.fps).to_string()
+            main_tractor_out = self.get_duration_timecode() if self.playlists else "00:05:00.000"
             main_tractor_attrs: dict[str, str] = {
                 "id": sequence_uuid,
                 "in": "00:00:00.000",
                 "out": main_tractor_out
             }
+
             main_tractor = ET.SubElement(root, "tractor", main_tractor_attrs)
             self._tractor_counter += 1
 
@@ -614,22 +630,12 @@ class MLTProject:
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:control_uuid"})
             prop.text = sequence_uuid
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:duration"})
-            fps = int(self.profile.fps)
-            max_duration = 0
-            for playlist in self.playlists.values():
-                duration_frames = playlist.get_duration_frames()
-                max_duration = max(max_duration, duration_frames)
-            if max_duration > 0:
-                hours = max_duration // (3600 * fps)
-                mins = (max_duration % (3600 * fps)) // (60 * fps)
-                secs = (max_duration % (60 * fps)) // fps
-                frames = max_duration % fps
-                prop.text = f"{hours:02d}:{mins:02d}:{secs:02d}:{frames:02d}"
-            else:
-                prop.text = "00:00:00:01"
-            maxduration = str(max_duration) if max_duration > 0 else "1"
+            prop.text = self.get_duration_timecode()
+            max_duration = self.get_duration_frames()
+            maxduration_str = str(max_duration) if max_duration > 0 else "1"
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:maxduration"})
-            prop.text = maxduration
+            prop.text = maxduration_str
+
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:producer_type"})
             prop.text = "17"
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:id"})

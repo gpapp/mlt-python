@@ -208,12 +208,13 @@ class Playlist:
         """
         self.properties[name] = value
 
-    def to_xml(self, producer_to_chain: dict[str, str] | None = None) -> ET.Element:
+    def to_xml(self, producer_to_chain: dict[str, str] | None = None, fps: float | None = None) -> ET.Element:
         """Generate XML element for this playlist.
 
         Args:
             producer_to_chain: Optional mapping from producer ID to chain ID.
                              If provided, clip references will use chain IDs.
+            fps: Optional frames per second for timecode conversion.
 
         Returns:
             XML Element representing the playlist
@@ -227,9 +228,12 @@ class Playlist:
 
         # Add clips and blanks
         for item in self.clips:
-            xml_elem = item.to_xml()
-            if producer_to_chain and isinstance(item, Clip) and item.producer_id in producer_to_chain:
-                xml_elem.set("producer", producer_to_chain[item.producer_id])
+            if isinstance(item, Clip):
+                xml_elem = item.to_xml(fps=fps)
+                if producer_to_chain and item.producer_id in producer_to_chain:
+                    xml_elem.set("producer", producer_to_chain[item.producer_id])
+            else:
+                xml_elem = item.to_xml()
             elem.append(xml_elem)
 
         return elem

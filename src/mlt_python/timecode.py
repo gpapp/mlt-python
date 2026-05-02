@@ -84,6 +84,20 @@ class Timecode:
 
         return cls(hours, minutes, seconds, frame_part, fps)
 
+    @classmethod
+    def from_seconds(cls, seconds: float, fps: float) -> "Timecode":
+        """Convert float seconds to Timecode.
+
+        Args:
+            seconds: Seconds
+            fps: Frames per second
+
+        Returns:
+            Timecode object
+        """
+        return cls.from_frames(int(round(seconds * fps)), fps)
+
+
     def to_frames(self) -> int:
         """Convert timecode to absolute frame number.
 

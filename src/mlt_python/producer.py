@@ -228,29 +228,25 @@ class Producer:
             is_audio = resource.endswith((".mp3", ".wav", ".aac", ".flac", ".ogg"))
             is_video = resource.endswith((".mkv", ".mp4", ".avi", ".mov", ".webm"))
             if is_audio:
-                prop = ET.SubElement(chain, "property", {"name": "audio_index"})
-                prop.text = "0"
-                prop = ET.SubElement(chain, "property", {"name": "video_index"})
-                prop.text = "-1"
-                prop = ET.SubElement(chain, "property", {"name": "astream"})
-                prop.text = "0"
-                prop = ET.SubElement(chain, "property", {"name": "set.test_audio"})
-                prop.text = "0"
-                prop = ET.SubElement(chain, "property", {"name": "set.test_image"})
-                prop.text = "1"
+                if "audio_index" not in self.properties:
+                    ET.SubElement(chain, "property", {"name": "audio_index"}).text = "0"
+                if "video_index" not in self.properties:
+                    ET.SubElement(chain, "property", {"name": "video_index"}).text = "-1"
+                if "astream" not in self.properties:
+                    ET.SubElement(chain, "property", {"name": "astream"}).text = "0"
+                ET.SubElement(chain, "property", {"name": "set.test_audio"}).text = "0"
+                ET.SubElement(chain, "property", {"name": "set.test_image"}).text = "1"
             elif is_video:
-                prop = ET.SubElement(chain, "property", {"name": "audio_index"})
-                prop.text = "1"
-                prop = ET.SubElement(chain, "property", {"name": "video_index"})
-                prop.text = "0"
-                prop = ET.SubElement(chain, "property", {"name": "vstream"})
-                prop.text = "0"
-                prop = ET.SubElement(chain, "property", {"name": "astream"})
-                prop.text = "0"
-                prop = ET.SubElement(chain, "property", {"name": "set.test_audio"})
-                prop.text = "1"
-                prop = ET.SubElement(chain, "property", {"name": "set.test_image"})
-                prop.text = "0"
+                if "audio_index" not in self.properties:
+                    ET.SubElement(chain, "property", {"name": "audio_index"}).text = "1"
+                if "video_index" not in self.properties:
+                    ET.SubElement(chain, "property", {"name": "video_index"}).text = "0"
+                if "vstream" not in self.properties:
+                    ET.SubElement(chain, "property", {"name": "vstream"}).text = "0"
+                if "astream" not in self.properties:
+                    ET.SubElement(chain, "property", {"name": "astream"}).text = "0"
+                ET.SubElement(chain, "property", {"name": "set.test_audio"}).text = "1"
+                ET.SubElement(chain, "property", {"name": "set.test_image"}).text = "0"
             # Add xml property
             prop = ET.SubElement(chain, "property", {"name": "xml"})
             prop.text = "was here"

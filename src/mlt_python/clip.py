@@ -128,17 +128,27 @@ class Clip:
             return None
         return str(Timecode.from_frames(duration, fps))
 
-    def to_xml(self) -> ET.Element:
+    def to_xml(self, fps: float | None = None) -> ET.Element:
         """Generate XML element for this clip entry.
+
+        Args:
+            fps: Optional frames per second for timecode conversion.
+                 If provided, 'in' and 'out' will be timecodes.
 
         Returns:
             XML Element representing the entry
         """
         attrs: dict[str, str] = {"producer": self.producer_id}
         if self.in_point is not None:
-            attrs["in"] = str(self.in_point)
+            if fps:
+                attrs["in"] = Timecode.from_frames(self.in_point, fps).to_string()
+            else:
+                attrs["in"] = str(self.in_point)
         if self.out_point is not None:
-            attrs["out"] = str(self.out_point)
+            if fps:
+                attrs["out"] = Timecode.from_frames(self.out_point, fps).to_string()
+            else:
+                attrs["out"] = str(self.out_point)
 
         elem = ET.Element("entry", attrs)
 
