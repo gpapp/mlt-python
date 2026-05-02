@@ -257,8 +257,8 @@ class Producer:
         prop = ET.SubElement(chain, "property", {"name": "kdenlive:control_uuid"})
         prop.text = str(uuid.uuid4())
         prop = ET.SubElement(chain, "property", {"name": "kdenlive:id"})
-        # Use a hash of the id for numeric ID
-        prop.text = str(abs(hash(self.id)) % 100)
+        # Use a hash of the id for numeric ID (larger range to avoid collisions)
+        prop.text = str(abs(hash(self.id)) % 1000000)
         prop = ET.SubElement(chain, "property", {"name": "kdenlive:clip_type"})
         prop.text = "1" if is_audio else "2" if is_video else "0"
         prop = ET.SubElement(chain, "property", {"name": "kdenlive:file_size"})

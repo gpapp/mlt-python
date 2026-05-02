@@ -494,8 +494,9 @@ class MLTProject:
 
         # Add black color producer (required by Kdenlive as base track)
         if kdenlive_format:
-            black_out = self.get_duration_timecode() if self.playlists else "00:05:00.000"
-            black_producer = ET.SubElement(root, "producer", {"id": "producer0", "in": "00:00:00.000", "out": black_out})
+            main_tractor_out = self.get_duration_timecode() if self.playlists else "00:05:00.000"
+            sequence_uuid = self.sequence_uuid
+            black_producer = ET.SubElement(root, "producer", {"id": "producer0", "in": "00:00:00.000", "out": main_tractor_out})
 
             ET.SubElement(black_producer, "property", {"name": "length"}).text = "2147483647"
             ET.SubElement(black_producer, "property", {"name": "eof"}).text = "continue"
@@ -505,233 +506,6 @@ class MLTProject:
             ET.SubElement(black_producer, "property", {"name": "kdenlive:playlistid"}).text = "black_track"
             ET.SubElement(black_producer, "property", {"name": "mlt_image_format"}).text = "rgba"
             ET.SubElement(black_producer, "property", {"name": "set.test_audio"}).text = "0"
-
-        # Add playlists (tracks) and tractors in alternating order (like reference)
-        if kdenlive_format and self.playlists:
-            playlist_list = list(self.playlists.values())
-            companion_map: dict[str, str] = {}
-            track_type_map: dict[str, str] = {}
-
-            # Track all used playlist IDs across loop iterations for unique companion IDs
-            existing_ids = set(self.playlists.keys())
-
-            for i, playlist in enumerate(playlist_list):
-                track_type = playlist.properties.get("kdenlive:track_type", "video")
-                track_type_map[playlist.id] = track_type
-                playlist.properties.pop("kdenlive:track_type", None)
-
-                # Add main playlist with chain references and FPS
-                root.append(playlist.to_xml(producer_to_chain, fps=self.profile.fps))
-                playlist_elem = root.find(f"playlist[@id='{playlist.id}']")
-                if playlist_elem is not None and track_type == "audio":
-                    prop = ET.SubElement(playlist_elem, "property", {"name": "kdenlive:audio_track"})
-                    prop.text = "1"
-
-                # Create companion playlist
-                next_id = 0
-                while f"playlist{next_id}" in existing_ids:
-                    next_id += 1
-                companion_id = f"playlist{next_id}"
-                existing_ids.add(companion_id)
-
-                companion = Playlist(id=companion_id)
-                root.append(companion.to_xml())
-                companion_elem = root.find(f"playlist[@id='{companion_id}']")
-                if companion_elem is not None and track_type == "audio":
-                    prop = ET.SubElement(companion_elem, "property", {"name": "kdenlive:audio_track"})
-                    prop.text = "1"
-                companion_map[playlist.id] = companion_id
-
-                # Add tractor IMMEDIATELY after its two playlists (alternating pattern)
-                tractor_attrs: dict[str, str] = {"id": f"tractor{self._tractor_counter}", "in": "00:00:00.000"}
-                tractor = ET.SubElement(root, "tractor", tractor_attrs)
-                self._tractor_counter += 1
-
-                # Add track properties
-                if track_type == "audio":
-                    prop = ET.SubElement(tractor, "property", {"name": "kdenlive:audio_track"})
-                    prop.text = "1"
-                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:trackheight"})
-                prop.text = "64"
-                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:timeline_active"})
-                prop.text = "1"
-                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:collapsed"})
-                prop.text = "0"
-                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:thumbs_format"})
-                prop.text = ""
-                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:audio_rec"})
-
-                # Add track references BEFORE filters (MLT requires this order)
-                hide_attr = "video" if track_type == "audio" else "audio"
-                ET.SubElement(tractor, "track", {"producer": playlist.id, "hide": hide_attr})
-                ET.SubElement(tractor, "track", {"producer": companion_id, "hide": hide_attr})
-
-                # Add default audio filters - ONLY for audio tracks
-                if track_type == "audio":
-                    for mlt_service in ["volume", "panner", "audiolevel"]:
-                        filter_elem = ET.SubElement(tractor, "filter", {"id": f"filter{self._filter_counter}"})
-                        self._filter_counter += 1
-                        if mlt_service == "volume":
-                            prop = ET.SubElement(filter_elem, "property", {"name": "window"})
-                            prop.text = "75"
-                            prop = ET.SubElement(filter_elem, "property", {"name": "max_gain"})
-                            prop.text = "20dB"
-                            prop = ET.SubElement(filter_elem, "property", {"name": "channel_mask"})
-                            prop.text = "-1"
-                        elif mlt_service == "panner":
-                            prop = ET.SubElement(filter_elem, "property", {"name": "channel"})
-                            prop.text = "-1"
-                            prop = ET.SubElement(filter_elem, "property", {"name": "start"})
-                            prop.text = "0.5"
-                        elif mlt_service == "audiolevel":
-                            prop = ET.SubElement(filter_elem, "property", {"name": "iec_scale"})
-                            prop.text = "0"
-                            prop = ET.SubElement(filter_elem, "property", {"name": "dbpeak"})
-                            prop.text = "1"
-                        prop = ET.SubElement(filter_elem, "property", {"name": "mlt_service"})
-                        prop.text = mlt_service
-                        prop = ET.SubElement(filter_elem, "property", {"name": "kdenlive_id"})
-                        prop.text = mlt_service
-                        prop = ET.SubElement(filter_elem, "property", {"name": "internal_added"})
-                        prop.text = "237"
-                        prop = ET.SubElement(filter_elem, "property", {"name": "disable"})
-                        prop.text = "1"
-
-
-
-            # Create main sequence tractor with sequential ID
-            sequence_id = f"tractor{self._tractor_counter}"
-            sequence_uuid = self.sequence_uuid
-            main_tractor_out = self.get_duration_timecode() if self.playlists else "00:05:00.000"
-            main_tractor_attrs: dict[str, str] = {
-                "id": sequence_uuid,
-                "in": "00:00:00.000",
-                "out": main_tractor_out
-            }
-
-            main_tractor = ET.SubElement(root, "tractor", main_tractor_attrs)
-            self._tractor_counter += 1
-
-            # Add sequence properties
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:uuid"})
-            prop.text = sequence_uuid
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:clipname"})
-            prop.text = "Sequence 1"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.hasAudio"})
-            prop.text = "1"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.hasVideo"})
-            prop.text = "1"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.activeTrack"})
-            prop.text = "2"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.tracksCount"})
-            prop.text = str(len(self.playlists))
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.documentuuid"})
-            prop.text = sequence_uuid
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:control_uuid"})
-            prop.text = sequence_uuid
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:duration"})
-            prop.text = self.get_duration_timecode()
-            max_duration = self.get_duration_frames()
-            maxduration_str = str(max_duration) if max_duration > 0 else "1"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:maxduration"})
-            prop.text = maxduration_str
-
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:producer_type"})
-            prop.text = "17"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:id"})
-            prop.text = "3"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:clip_type"})
-            prop.text = "0"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:file_size"})
-            prop.text = "0"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:folderid"})
-            prop.text = "2"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.audioTarget"})
-            prop.text = "1"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.disablepreview"})
-            prop.text = "0"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.position"})
-            prop.text = "0"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.scrollPos"})
-            prop.text = "0"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.tracks"})
-            prop.text = str(len(self.playlists))
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.verticalzoom"})
-            prop.text = "1"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.videoTarget"})
-            prop.text = "2"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.zonein"})
-            prop.text = "0"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.zoneout"})
-            prop.text = "75"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.zoom"})
-            prop.text = "8"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.groups"})
-            prop.text = "[\n]"
-            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.guides"})
-            prop.text = "[\n]"
-
-            # Add tracks and transitions to main tractor
-            ET.SubElement(main_tractor, "track", {"producer": "producer0"})
-            
-            # Keep track of track tractor IDs for references
-            track_ids = list(self.playlists.keys())
-            for i, track_id in enumerate(track_ids):
-                # The track tractors were created in the same order as self.playlists
-                # and started at tractor0.
-                ET.SubElement(main_tractor, "track", {"producer": f"tractor{i}"})
-
-            for i, track_id in enumerate(track_ids):
-                track_type = self.playlists[track_id].properties.get("kdenlive:track_type", "video")
-                service = "mix" if track_type == "audio" else "qtblend"
-                
-                transition = ET.SubElement(main_tractor, "transition", {"id": f"transition{i}"})
-                ET.SubElement(transition, "property", {"name": "a_track"}).text = "0"
-                ET.SubElement(transition, "property", {"name": "b_track"}).text = str(i + 1)
-                ET.SubElement(transition, "property", {"name": "mlt_service"}).text = service
-                ET.SubElement(transition, "property", {"name": "kdenlive_id"}).text = service
-                ET.SubElement(transition, "property", {"name": "internal_added"}).text = "237"
-                ET.SubElement(transition, "property", {"name": "always_active"}).text = "1"
-                
-                if service == "mix":
-                    ET.SubElement(transition, "property", {"name": "accepts_blanks"}).text = "1"
-                    ET.SubElement(transition, "property", {"name": "sum"}).text = "1"
-                else:
-                    ET.SubElement(transition, "property", {"name": "compositing"}).text = "0"
-                    ET.SubElement(transition, "property", {"name": "distort"}).text = "0"
-                    ET.SubElement(transition, "property", {"name": "rotate_center"}).text = "0"
-
-            # Add filters at end of main tractor
-            filter_elem = ET.SubElement(main_tractor, "filter", {"id": f"filter{self._filter_counter}"})
-            self._filter_counter += 1
-            prop = ET.SubElement(filter_elem, "property", {"name": "window"})
-            prop.text = "75"
-            prop = ET.SubElement(filter_elem, "property", {"name": "max_gain"})
-            prop.text = "20dB"
-            prop = ET.SubElement(filter_elem, "property", {"name": "channel_mask"})
-            prop.text = "-1"
-            prop = ET.SubElement(filter_elem, "property", {"name": "mlt_service"})
-            prop.text = "volume"
-            prop = ET.SubElement(filter_elem, "property", {"name": "kdenlive_id"})
-            prop.text = "volume"
-            prop = ET.SubElement(filter_elem, "property", {"name": "internal_added"})
-            prop.text = "237"
-            prop = ET.SubElement(filter_elem, "property", {"name": "disable"})
-            prop.text = "1"
-            filter_elem = ET.SubElement(main_tractor, "filter", {"id": f"filter{self._filter_counter}"})
-            self._filter_counter += 1
-            prop = ET.SubElement(filter_elem, "property", {"name": "channel"})
-            prop.text = "-1"
-            prop = ET.SubElement(filter_elem, "property", {"name": "mlt_service"})
-            prop.text = "panner"
-            prop = ET.SubElement(filter_elem, "property", {"name": "kdenlive_id"})
-            prop.text = "panner"
-            prop = ET.SubElement(filter_elem, "property", {"name": "internal_added"})
-            prop.text = "237"
-            prop = ET.SubElement(filter_elem, "property", {"name": "start"})
-            prop.text = "0.5"
-            prop = ET.SubElement(filter_elem, "property", {"name": "disable"})
-            prop.text = "1"
 
             # Add main_bin playlist for Kdenlive format
             sess_uuid = str(uuid.uuid4())
@@ -881,9 +655,244 @@ class MLTProject:
             # Add sequence tractor entry
             ET.SubElement(main_bin, "entry", {
                 "in": "00:00:00.000",
-                "out": "00:00:00.000",
+                "out": main_tractor_out,
                 "producer": sequence_uuid
             })
+
+            # Add playlists (tracks) and tractors in alternating order (like reference)
+            playlist_list = list(self.playlists.values())
+            companion_map: dict[str, str] = {}
+            track_type_map: dict[str, str] = {}
+
+            # Track all used playlist IDs across loop iterations for unique companion IDs
+            existing_ids = set(self.playlists.keys())
+
+            for i, playlist in enumerate(playlist_list):
+                track_type = playlist.properties.get("kdenlive:track_type", "video")
+                track_type_map[playlist.id] = track_type
+                playlist.properties.pop("kdenlive:track_type", None)
+
+                # Add main playlist with chain references and FPS
+                root.append(playlist.to_xml(producer_to_chain, fps=self.profile.fps))
+                playlist_elem = root.find(f"playlist[@id='{playlist.id}']")
+                if playlist_elem is not None and track_type == "audio":
+                    prop = ET.SubElement(playlist_elem, "property", {"name": "kdenlive:audio_track"})
+                    prop.text = "1"
+
+                # Create companion playlist
+                next_id = 0
+                while f"playlist{next_id}" in existing_ids:
+                    next_id += 1
+                companion_id = f"playlist{next_id}"
+                existing_ids.add(companion_id)
+
+                companion = Playlist(id=companion_id)
+                root.append(companion.to_xml())
+                companion_elem = root.find(f"playlist[@id='{companion_id}']")
+                if companion_elem is not None and track_type == "audio":
+                    prop = ET.SubElement(companion_elem, "property", {"name": "kdenlive:audio_track"})
+                    prop.text = "1"
+                companion_map[playlist.id] = companion_id
+
+                # Add tractor IMMEDIATELY after its two playlists (alternating pattern)
+                tractor_attrs: dict[str, str] = {"id": f"tractor{self._tractor_counter}", "in": "00:00:00.000"}
+                tractor = ET.SubElement(root, "tractor", tractor_attrs)
+                self._tractor_counter += 1
+
+                # Add track properties
+                if track_type == "audio":
+                    prop = ET.SubElement(tractor, "property", {"name": "kdenlive:audio_track"})
+                    prop.text = "1"
+                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:trackheight"})
+                prop.text = "64"
+                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:timeline_active"})
+                prop.text = "1"
+                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:collapsed"})
+                prop.text = "0"
+                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:thumbs_format"})
+                prop.text = ""
+                prop = ET.SubElement(tractor, "property", {"name": "kdenlive:audio_rec"})
+
+                # Add track references BEFORE filters (MLT requires this order)
+                hide_attr = "video" if track_type == "audio" else "audio"
+                ET.SubElement(tractor, "track", {"producer": playlist.id, "hide": hide_attr})
+                ET.SubElement(tractor, "track", {"producer": companion_id, "hide": hide_attr})
+
+                # Add default audio filters - ONLY for audio tracks
+                if track_type == "audio":
+                    for mlt_service in ["volume", "panner", "audiolevel"]:
+                        filter_elem = ET.SubElement(tractor, "filter", {"id": f"filter{self._filter_counter}"})
+                        self._filter_counter += 1
+                        if mlt_service == "volume":
+                            prop = ET.SubElement(filter_elem, "property", {"name": "window"})
+                            prop.text = "75"
+                            prop = ET.SubElement(filter_elem, "property", {"name": "max_gain"})
+                            prop.text = "20dB"
+                            prop = ET.SubElement(filter_elem, "property", {"name": "channel_mask"})
+                            prop.text = "-1"
+                        elif mlt_service == "panner":
+                            prop = ET.SubElement(filter_elem, "property", {"name": "channel"})
+                            prop.text = "-1"
+                            prop = ET.SubElement(filter_elem, "property", {"name": "start"})
+                            prop.text = "0.5"
+                        elif mlt_service == "audiolevel":
+                            prop = ET.SubElement(filter_elem, "property", {"name": "iec_scale"})
+                            prop.text = "0"
+                            prop = ET.SubElement(filter_elem, "property", {"name": "dbpeak"})
+                            prop.text = "1"
+                        prop = ET.SubElement(filter_elem, "property", {"name": "mlt_service"})
+                        prop.text = mlt_service
+                        prop = ET.SubElement(filter_elem, "property", {"name": "kdenlive_id"})
+                        prop.text = mlt_service
+                        prop = ET.SubElement(filter_elem, "property", {"name": "internal_added"})
+                        prop.text = "237"
+                        prop = ET.SubElement(filter_elem, "property", {"name": "disable"})
+                        prop.text = "1"
+
+                # Add custom playlist filters
+                for filter_obj in playlist.filters:
+                    if not filter_obj.id:
+                        filter_obj.id = f"filter{self._filter_counter}"
+                        self._filter_counter += 1
+                    # In Kdenlive tractors, we need to add the filter element directly
+                    tractor.append(filter_obj.to_xml())
+
+
+
+            # Create main sequence tractor with sequential ID
+            sequence_id = f"tractor{self._tractor_counter}"
+            sequence_uuid = self.sequence_uuid
+            main_tractor_attrs: dict[str, str] = {
+                "id": sequence_uuid,
+                "in": "00:00:00.000",
+                "out": main_tractor_out
+            }
+
+            main_tractor = ET.SubElement(root, "tractor", main_tractor_attrs)
+            self._tractor_counter += 1
+
+            # Add sequence properties
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:uuid"})
+            prop.text = sequence_uuid
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:clipname"})
+            prop.text = "Sequence 1"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.hasAudio"})
+            prop.text = "1"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.hasVideo"})
+            prop.text = "1"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.activeTrack"})
+            prop.text = "2"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.tracksCount"})
+            prop.text = str(len(self.playlists))
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.documentuuid"})
+            prop.text = sequence_uuid
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:control_uuid"})
+            prop.text = sequence_uuid
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:duration"})
+            prop.text = self.get_duration_timecode()
+            max_duration = self.get_duration_frames()
+            maxduration_str = str(max_duration) if max_duration > 0 else "1"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:maxduration"})
+            prop.text = maxduration_str
+
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:producer_type"})
+            prop.text = "17"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:id"})
+            prop.text = "3"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:clip_type"})
+            prop.text = "0"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:file_size"})
+            prop.text = "0"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:folderid"})
+            prop.text = "2"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.audioTarget"})
+            prop.text = "1"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.disablepreview"})
+            prop.text = "0"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.position"})
+            prop.text = "0"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.scrollPos"})
+            prop.text = "0"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.tracks"})
+            prop.text = str(len(self.playlists))
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.verticalzoom"})
+            prop.text = "1"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.videoTarget"})
+            prop.text = "2"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.zonein"})
+            prop.text = "0"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.zoneout"})
+            prop.text = "75"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.zoom"})
+            prop.text = "8"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.groups"})
+            prop.text = "[\n]"
+            prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.guides"})
+            prop.text = "[\n]"
+
+            # Add tracks and transitions to main tractor
+            ET.SubElement(main_tractor, "track", {"producer": "producer0"})
+            
+            # Keep track of track tractor IDs for references
+            track_ids = list(self.playlists.keys())
+            for i, track_id in enumerate(track_ids):
+                # The track tractors were created in the same order as self.playlists
+                # and started at tractor0.
+                ET.SubElement(main_tractor, "track", {"producer": f"tractor{i}"})
+
+            for i, track_id in enumerate(track_ids):
+                track_type = self.playlists[track_id].properties.get("kdenlive:track_type", "video")
+                service = "mix" if track_type == "audio" else "qtblend"
+                
+                transition = ET.SubElement(main_tractor, "transition", {"id": f"transition{i}"})
+                ET.SubElement(transition, "property", {"name": "a_track"}).text = "0"
+                ET.SubElement(transition, "property", {"name": "b_track"}).text = str(i + 1)
+                ET.SubElement(transition, "property", {"name": "mlt_service"}).text = service
+                ET.SubElement(transition, "property", {"name": "kdenlive_id"}).text = service
+                ET.SubElement(transition, "property", {"name": "internal_added"}).text = "237"
+                ET.SubElement(transition, "property", {"name": "always_active"}).text = "1"
+                
+                if service == "mix":
+                    ET.SubElement(transition, "property", {"name": "accepts_blanks"}).text = "1"
+                    ET.SubElement(transition, "property", {"name": "sum"}).text = "1"
+                else:
+                    ET.SubElement(transition, "property", {"name": "compositing"}).text = "0"
+                    ET.SubElement(transition, "property", {"name": "distort"}).text = "0"
+                    ET.SubElement(transition, "property", {"name": "rotate_center"}).text = "0"
+
+            # Add filters at end of main tractor
+            filter_elem = ET.SubElement(main_tractor, "filter", {"id": f"filter{self._filter_counter}"})
+            self._filter_counter += 1
+            prop = ET.SubElement(filter_elem, "property", {"name": "window"})
+            prop.text = "75"
+            prop = ET.SubElement(filter_elem, "property", {"name": "max_gain"})
+            prop.text = "20dB"
+            prop = ET.SubElement(filter_elem, "property", {"name": "channel_mask"})
+            prop.text = "-1"
+            prop = ET.SubElement(filter_elem, "property", {"name": "mlt_service"})
+            prop.text = "volume"
+            prop = ET.SubElement(filter_elem, "property", {"name": "kdenlive_id"})
+            prop.text = "volume"
+            prop = ET.SubElement(filter_elem, "property", {"name": "internal_added"})
+            prop.text = "237"
+            prop = ET.SubElement(filter_elem, "property", {"name": "disable"})
+            prop.text = "1"
+            filter_elem = ET.SubElement(main_tractor, "filter", {"id": f"filter{self._filter_counter}"})
+            self._filter_counter += 1
+            prop = ET.SubElement(filter_elem, "property", {"name": "channel"})
+            prop.text = "-1"
+            prop = ET.SubElement(filter_elem, "property", {"name": "mlt_service"})
+            prop.text = "panner"
+            prop = ET.SubElement(filter_elem, "property", {"name": "kdenlive_id"})
+            prop.text = "panner"
+            prop = ET.SubElement(filter_elem, "property", {"name": "internal_added"})
+            prop.text = "237"
+            prop = ET.SubElement(filter_elem, "property", {"name": "start"})
+            prop.text = "0.5"
+            prop = ET.SubElement(filter_elem, "property", {"name": "disable"})
+            prop.text = "1"
+
+            # (This block was moved up)
 
             # Add projectTractor tractor after main_bin
             project_tractor = ET.SubElement(root, "tractor", {

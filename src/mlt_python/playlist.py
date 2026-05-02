@@ -29,6 +29,7 @@ class Playlist:
         id: str,
         clips: list[Clip | Blank] | None = None,
         properties: dict[str, str] | None = None,
+        filters: list["Filter"] | None = None,
     ) -> None:
         """Initialize a Playlist.
 
@@ -36,10 +37,12 @@ class Playlist:
             id: Unique identifier (e.g., "playlist0", "video_track")
             clips: Initial list of clips and blanks
             properties: Additional MLT properties
+            filters: Initial list of filters
         """
         self.id = id
         self.clips: list[Clip | Blank] = clips or []
         self.properties: dict[str, str] = properties or {}
+        self.filters: list["Filter"] = filters or []
 
     def add_clip(
         self,
@@ -207,6 +210,14 @@ class Playlist:
             value: Property value
         """
         self.properties[name] = value
+
+    def add_filter(self, filter_obj: "Filter") -> None:
+        """Add a filter to the playlist.
+
+        Args:
+            filter_obj: Filter object to add
+        """
+        self.filters.append(filter_obj)
 
     def to_xml(self, producer_to_chain: dict[str, str] | None = None, fps: float | None = None) -> ET.Element:
         """Generate XML element for this playlist.
