@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel", "setuptools-git-versioning"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlt-xml"
+version = "0.1.0"
+description = "Pure Python library for creating and modifying MLT XML files for Kdenlive"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Gergely Papp", email = "gergely.papp@itworks.hu"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video :: Non-Linear Editor",
+]
+keywords = ["mlt", "kdenlive", "video", "xml", "editor"]
+
+[project.urls]
+Homepage = "https://github.com/gpapp/mlt-python"
+Repository = "https://github.com/gpapp/mlt-python.git"
+Issues = "https://github.com/gpapp/mlt-python/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
