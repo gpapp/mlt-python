@@ -20,6 +20,7 @@ from .transition import Transition, Transitions
 from .subtitle import SubtitleTrack, SRTFile
 from .timecode import Timecode
 from .kdenlive import KdenliveProperties
+from .marker import Marker, markers_to_json, markers_from_json
 
 
 class MLTProject:
@@ -64,6 +65,10 @@ class MLTProject:
         self.transitions: list[Transition] = []
         self.tractor_id: str = "tractor0"
         self.kdenlive: KdenliveProperties = KdenliveProperties()
+
+        # Markers: clip markers keyed by producer_id; sequence guides on timeline
+        self.clip_markers: dict[str, list[Marker]] = {}
+        self.sequence_markers: list[Marker] = []
 
         # Track counter for auto-generating track IDs
         self._track_counter: int = 0
@@ -367,6 +372,111 @@ class MLTProject:
         self.transitions.append(transition)
         return transition
 
+    # ------------------------------------------------------------------ #
+    # Marker API                                                          #
+    # ------------------------------------------------------------------ #
+
+    def add_marker(
+        self,
+        pos: str,
+        comment: str = "Marker",
+        marker_type: int = 0,
+        duration: str | None = None,
+        producer_id: str | None = None,
+    ) -> Marker:
+        """Add a marker to the timeline (guide) or to a specific clip.
+
+        Args:
+            pos: Position timecode (HH:MM:SS:FF).
+            comment: Marker label.
+            marker_type: Colour category 0-8 (0=purple, 1=blue, …).
+            duration: Optional region duration timecode. ``None`` = point.
+            producer_id: If given, attach as a clip marker on that producer.
+                         Otherwise the marker becomes a sequence/timeline guide.
+
+        Returns:
+            The created Marker.
+
+        Raises:
+            KeyError: If ``producer_id`` is given but not found.
+        """
+        if producer_id is not None and producer_id not in self.producers:
+            raise KeyError(f"Producer not found: {producer_id}")
+
+        marker = Marker.from_timecode(
+            pos=pos,
+            fps=self.profile.fps,
+            comment=comment,
+            marker_type=marker_type,
+            duration=duration,
+        )
+
+        if producer_id is not None:
+            self.clip_markers.setdefault(producer_id, []).append(marker)
+        else:
+            self.sequence_markers.append(marker)
+
+        return marker
+
+    def remove_marker(
+        self,
+        pos: str,
+        producer_id: str | None = None,
+    ) -> bool:
+        """Remove a marker at a given position.
+
+        Args:
+            pos: Position timecode (HH:MM:SS:FF) to match.
+            producer_id: If given, remove from clip markers; else from guides.
+
+        Returns:
+            ``True`` if a marker was removed, ``False`` if none matched.
+        """
+        target_frame = Timecode.from_string(pos, self.profile.fps).to_frames()
+
+        if producer_id is not None:
+            lst = self.clip_markers.get(producer_id, [])
+        else:
+            lst = self.sequence_markers
+
+        for i, m in enumerate(lst):
+            if m.pos == target_frame:
+                lst.pop(i)
+                return True
+        return False
+
+    def get_markers(
+        self,
+        producer_id: str | None = None,
+    ) -> list[Marker]:
+        """Return markers for a producer or the sequence.
+
+        Args:
+            producer_id: If given, return clip markers for that producer.
+                         If ``None``, return sequence/timeline guides.
+
+        Returns:
+            List of Marker objects (copy).
+        """
+        if producer_id is not None:
+            return list(self.clip_markers.get(producer_id, []))
+        return list(self.sequence_markers)
+
+    def clear_markers(
+        self,
+        producer_id: str | None = None,
+    ) -> None:
+        """Remove all markers for a producer or from the sequence.
+
+        Args:
+            producer_id: If given, clear clip markers for that producer.
+                         If ``None``, clear sequence/timeline guides.
+        """
+        if producer_id is not None:
+            self.clip_markers.pop(producer_id, None)
+        else:
+            self.sequence_markers.clear()
+
     def get_duration_frames(self) -> int:
         """Get the total duration of the project in frames.
 
@@ -470,7 +580,14 @@ class MLTProject:
             for producer in self.producers.values():
                 chain_id = f"chain{self._chain_counter}"
                 producer_to_chain[producer.id] = chain_id
-                root.append(producer.to_xml_chain(fps=self.profile.fps, chain_id=chain_id))
+                chain_elem = producer.to_xml_chain(fps=self.profile.fps, chain_id=chain_id)
+                # Attach clip markers if any
+                clip_mkrs = self.clip_markers.get(producer.id, [])
+                if clip_mkrs:
+                    from xml.etree import ElementTree as _ET
+                    prop = _ET.SubElement(chain_elem, "property", {"name": "kdenlive:markers"})
+                    prop.text = markers_to_json(clip_mkrs)
+                root.append(chain_elem)
                 self._chain_counter += 1
         else:
             for producer in self.producers.values():
@@ -828,7 +945,10 @@ class MLTProject:
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.groups"})
             prop.text = "[\n]"
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.guides"})
-            prop.text = "[\n]"
+            if self.sequence_markers:
+                prop.text = markers_to_json(self.sequence_markers)
+            else:
+                prop.text = "[\n]"
 
             # Add tracks and transitions to main tractor
             ET.SubElement(main_tractor, "track", {"producer": "producer0"})

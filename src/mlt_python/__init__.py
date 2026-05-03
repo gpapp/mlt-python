@@ -37,6 +37,7 @@ from .transition import Transition, Transitions
 from .subtitle import SubtitleTrack, SubtitleItem, SRTFile
 from .timecode import Timecode
 from .kdenlive import KdenliveProperties, KdenliveMetadata
+from .marker import Marker, markers_to_json, markers_from_json
 
 __version__ = "0.1.0"
 __all__ = [
@@ -56,4 +57,7 @@ __all__ = [
     "Timecode",
     "KdenliveProperties",
     "KdenliveMetadata",
+    "Marker",
+    "markers_to_json",
+    "markers_from_json",
 ]
