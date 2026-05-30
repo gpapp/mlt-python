@@ -4,7 +4,8 @@ Represents a clip entry in a playlist. Clips reference producers with
 specific in/out points to define which portion of the media to use.
 """
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
+from .timecode import Timecode
 from xml.etree import ElementTree as ET
 
 from .timecode import Timecode
@@ -174,8 +175,53 @@ class Clip:
             Clip object
         """
         producer_id = elem.get("producer", "")
-        in_point = int(elem.get("in", "0"))
-        out_point = int(elem.get("out", "0")) if elem.get("out") else None
+        
+        # Handle both timecode strings (HH:MM:SS:FF) and raw frame numbers
+        # Also handle timestamp format (HH:MM:SS.mmm)
+        in_str = elem.get("in", "0")
+        in_point = None
+        if ":" in in_str:
+            parts = in_str.split(":")
+            if len(parts) == 4:
+                # HH:MM:SS:FF format
+                in_point = Timecode.from_string(in_str, 30.0).to_frames()
+            elif len(parts) == 3 and "." in parts[2]:
+                # HH:MM:SS.mmm format (timestamp)
+                try:
+                    hours = int(parts[0])
+                    minutes = int(parts[1])
+                    seconds = float(parts[2])
+                    total_seconds = hours * 3600 + minutes * 60 + seconds
+                    in_point = int(total_seconds * 30.0)  # Assume 30 fps
+                except (ValueError, IndexError):
+                    in_point = 0
+        else:
+            try:
+                in_point = int(in_str)
+            except ValueError:
+                in_point = 0
+            
+        out_str = elem.get("out")
+        out_point = None
+        if out_str:
+            if ":" in out_str:
+                parts = out_str.split(":")
+                if len(parts) == 4:
+                    out_point = Timecode.from_string(out_str, 30.0).to_frames()
+                elif len(parts) == 3 and "." in parts[2]:
+                    try:
+                        hours = int(parts[0])
+                        minutes = int(parts[1])
+                        seconds = float(parts[2])
+                        total_seconds = hours * 3600 + minutes * 60 + seconds
+                        out_point = int(total_seconds * 30.0)
+                    except (ValueError, IndexError):
+                        out_point = None
+            else:
+                try:
+                    out_point = int(out_str)
+                except ValueError:
+                    out_point = None
 
         # Parse properties
         properties: dict[str, str] = {}

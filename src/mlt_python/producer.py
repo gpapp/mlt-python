@@ -6,8 +6,10 @@ Producers are the basic building blocks that generate frames in MLT.
 
 from typing import Any
 from xml.etree import ElementTree as ET
+import uuid
 
 from .filter import Filter
+from .timecode import Timecode
 
 
 class Producer:
@@ -165,22 +167,20 @@ class Producer:
 
         return elem
 
-    def to_xml_chain(self, fps: float = 30.0, chain_id: str | None = None) -> ET.Element:
+    def to_xml_chain(self, fps: float = 30.0, chain_id: str | None = None, kdenlive_mode: str | None = None) -> ET.Element:
         """Generate XML element as a chain (for Kdenlive bin).
 
         Args:
             fps: Frames per second for timestamp conversion
             chain_id: Optional chain ID (auto-generated if None)
+            kdenlive_mode: Kdenlive mode ('audio', 'video', or None)
 
         Returns:
             XML Element representing the producer as a chain element
         """
-        import uuid
-
-        # Determine clip type based on resource extension
         resource = self.properties.get("resource", "")
-        is_audio = resource.endswith((".mp3", ".wav", ".aac", ".flac", ".ogg"))
-        is_video = resource.endswith((".mkv", ".mp4", ".avi", ".mov", ".webm"))
+        is_audio_only = False
+        is_video_only = False
 
         if chain_id is None:
             chain_id = f"chain{self.id}" if not self.id.startswith("chain") else self.id
@@ -215,56 +215,89 @@ class Producer:
             prop.text = value.replace("\\", "/") if name == "resource" else value
 
         # Add kdenlive:original_path for file resources
-        resource = self.properties.get("resource", "")
         if resource and resource != "black" and not resource.startswith("+"):
-            prop = ET.SubElement(chain, "property", {"name": "kdenlive:original_path"})
-            prop.text = resource.replace("\\", "/")
+            # Check if property already exists
+            if not any(p.get("name") == "kdenlive:original_path" for p in chain.findall("property")):
+                prop = ET.SubElement(chain, "property", {"name": "kdenlive:original_path"})
+                prop.text = resource.replace("\\", "/")
 
         # Add additional properties for Kdenlive compatibility
         if resource and resource != "black" and not resource.startswith("+"):
-            prop = ET.SubElement(chain, "property", {"name": "seekable"})
-            prop.text = "1"
+            if not any(p.get("name") == "seekable" for p in chain.findall("property")):
+                prop = ET.SubElement(chain, "property", {"name": "seekable"})
+                prop.text = "1"
             # Determine audio/video indices based on resource type
-            is_audio = resource.endswith((".mp3", ".wav", ".aac", ".flac", ".ogg"))
-            is_video = resource.endswith((".mkv", ".mp4", ".avi", ".mov", ".webm"))
-            if is_audio:
-                if "audio_index" not in self.properties:
-                    ET.SubElement(chain, "property", {"name": "audio_index"}).text = "0"
-                if "video_index" not in self.properties:
-                    ET.SubElement(chain, "property", {"name": "video_index"}).text = "-1"
-                if "astream" not in self.properties:
-                    ET.SubElement(chain, "property", {"name": "astream"}).text = "0"
-                ET.SubElement(chain, "property", {"name": "set.test_audio"}).text = "0"
-                ET.SubElement(chain, "property", {"name": "set.test_image"}).text = "1"
-            elif is_video:
-                if "audio_index" not in self.properties:
-                    ET.SubElement(chain, "property", {"name": "audio_index"}).text = "1"
-                if "video_index" not in self.properties:
-                    ET.SubElement(chain, "property", {"name": "video_index"}).text = "0"
-                if "vstream" not in self.properties:
-                    ET.SubElement(chain, "property", {"name": "vstream"}).text = "0"
-                if "astream" not in self.properties:
-                    ET.SubElement(chain, "property", {"name": "astream"}).text = "0"
-                ET.SubElement(chain, "property", {"name": "set.test_audio"}).text = "1"
-                ET.SubElement(chain, "property", {"name": "set.test_image"}).text = "0"
-            # Add xml property
-            prop = ET.SubElement(chain, "property", {"name": "xml"})
-            prop.text = "was here"
-            prop = ET.SubElement(chain, "property", {"name": "mute_on_pause"})
-            prop.text = "0"
+            ext = resource.lower()
+            is_audio_only = ext.endswith((".mp3", ".wav", ".aac", ".flac", ".ogg"))
+            is_video_only = ext.endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif"))
+            is_av = ext.endswith((".mkv", ".mp4", ".avi", ".mov", ".webm"))
 
-        # Add Kdenlive-specific properties
-        prop = ET.SubElement(chain, "property", {"name": "kdenlive:control_uuid"})
-        prop.text = str(uuid.uuid4())
-        prop = ET.SubElement(chain, "property", {"name": "kdenlive:id"})
-        # Use a hash of the id for numeric ID (larger range to avoid collisions)
-        prop.text = str(abs(hash(self.id)) % 1000000)
-        prop = ET.SubElement(chain, "property", {"name": "kdenlive:clip_type"})
-        prop.text = "1" if is_audio else "2" if is_video else "0"
-        prop = ET.SubElement(chain, "property", {"name": "kdenlive:file_size"})
-        prop.text = "0"  # Placeholder
-        prop = ET.SubElement(chain, "property", {"name": "kdenlive:folderid"})
-        prop.text = "-1"
+            if is_audio_only:
+                if not any(p.get("name") == "audio_index" for p in chain.findall("property")):
+                    if "audio_index" not in self.properties:
+                        ET.SubElement(chain, "property", {"name": "audio_index"}).text = "0"
+                if not any(p.get("name") == "video_index" for p in chain.findall("property")):
+                    if "video_index" not in self.properties:
+                        ET.SubElement(chain, "property", {"name": "video_index"}).text = "-1"
+                if not any(p.get("name") == "astream" for p in chain.findall("property")):
+                    if "astream" not in self.properties:
+                        ET.SubElement(chain, "property", {"name": "astream"}).text = "0"
+                # Default audio flags
+                if kdenlive_mode != "video":
+                    if not any(p.get("name") == "set.test_audio" for p in chain.findall("property")):
+                        ET.SubElement(chain, "property", {"name": "set.test_audio"}).text = "0"
+                    if not any(p.get("name") == "set.test_image" for p in chain.findall("property")):
+                        ET.SubElement(chain, "property", {"name": "set.test_image"}).text = "1"
+            elif is_video_only or is_av:
+                if not any(p.get("name") == "audio_index" for p in chain.findall("property")):
+                    if "audio_index" not in self.properties:
+                        ET.SubElement(chain, "property", {"name": "audio_index"}).text = "1"
+                if not any(p.get("name") == "video_index" for p in chain.findall("property")):
+                    if "video_index" not in self.properties:
+                        ET.SubElement(chain, "property", {"name": "video_index"}).text = "0"
+                if not any(p.get("name") == "vstream" for p in chain.findall("property")):
+                    if "vstream" not in self.properties:
+                        ET.SubElement(chain, "property", {"name": "vstream"}).text = "0"
+                if not any(p.get("name") == "astream" for p in chain.findall("property")):
+                    if "astream" not in self.properties:
+                        ET.SubElement(chain, "property", {"name": "astream"}).text = "0"
+               # Video/AV flags depend on the specific split track mode in Kdenlive
+                test_audio = "1" if kdenlive_mode == "video" or kdenlive_mode is None else "0"
+                test_image = "0" if kdenlive_mode == "video" or kdenlive_mode is None else "1"
+                
+                if not any(p.get("name") == "set.test_audio" for p in chain.findall("property")):
+                    ET.SubElement(chain, "property", {"name": "set.test_audio"}).text = test_audio
+                if not any(p.get("name") == "set.test_image" for p in chain.findall("property")):
+                    ET.SubElement(chain, "property", {"name": "set.test_image"}).text = test_image
+
+        # Add Kdenlive-specific properties (only if not already present)
+        if "kdenlive:control_uuid" not in self.properties:
+            self.properties["kdenlive:control_uuid"] = f"{{{uuid.uuid4()}}}"
+            # Add xml property
+            if not any(p.get("name") == "xml" for p in chain.findall("property")):
+                prop = ET.SubElement(chain, "property", {"name": "xml"})
+                prop.text = "was here"
+            if not any(p.get("name") == "mute_on_pause" for p in chain.findall("property")):
+                prop = ET.SubElement(chain, "property", {"name": "mute_on_pause"})
+                prop.text = "0"
+
+        # Add Kdenlive-specific properties (only if not already present)
+        if not any(p.get("name") == "kdenlive:control_uuid" for p in chain.findall("property")):
+            prop = ET.SubElement(chain, "property", {"name": "kdenlive:control_uuid"})
+            prop.text = self.properties["kdenlive:control_uuid"]
+        if not any(p.get("name") == "kdenlive:id" for p in chain.findall("property")):
+            prop = ET.SubElement(chain, "property", {"name": "kdenlive:id"})
+            # Use a hash of the id for numeric ID (larger range to avoid collisions)
+            prop.text = str(abs(hash(self.id)) % 1000000)
+        if not any(p.get("name") == "kdenlive:clip_type" for p in chain.findall("property")):
+            prop = ET.SubElement(chain, "property", {"name": "kdenlive:clip_type"})
+            prop.text = "1" if is_audio_only else "2" if is_video_only else "0"
+        if not any(p.get("name") == "kdenlive:file_size" for p in chain.findall("property")):
+            prop = ET.SubElement(chain, "property", {"name": "kdenlive:file_size"})
+            prop.text = "0"  # Placeholder
+        if not any(p.get("name") == "kdenlive:folderid" for p in chain.findall("property")):
+            prop = ET.SubElement(chain, "property", {"name": "kdenlive:folderid"})
+            prop.text = "-1"
 
         # Add filters
         for i, filter_obj in enumerate(self.filters):
@@ -290,8 +323,56 @@ class Producer:
         """
         id = elem.get("id", "")
         mlt_service = elem.get("mlt_service", "avformat")
-        in_point = int(elem.get("in", "0")) if elem.get("in") else None
-        out_point = int(elem.get("out", "0")) if elem.get("out") else None
+        
+        # Handle both frame numbers and timecode/timestamp strings for in/out points
+        in_str = elem.get("in")
+        out_str = elem.get("out")
+        
+        in_point = None
+        out_point = None
+        
+        if in_str:
+            if ":" in in_str:
+                # Timecode or timestamp format - try to parse
+                try:
+                    # Try HH:MM:SS:FF format first
+                    tc = Timecode.from_string(in_str, 30.0)
+                    in_point = tc.to_frames()
+                except ValueError:
+                    # Try HH:MM:SS.mmm format
+                    parts = in_str.split(":")
+                    if len(parts) == 3:
+                        try:
+                            seconds = float(parts[2])
+                            total_seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + seconds
+                            in_point = int(total_seconds * 30.0)  # Assume 30 fps
+                        except (ValueError, IndexError):
+                            pass
+            else:
+                try:
+                    in_point = int(in_str)
+                except ValueError:
+                    pass
+        
+        if out_str:
+            if ":" in out_str:
+                try:
+                    tc = Timecode.from_string(out_str, 30.0)
+                    out_point = tc.to_frames()
+                except ValueError:
+                    parts = out_str.split(":")
+                    if len(parts) == 3:
+                        try:
+                            seconds = float(parts[2])
+                            total_seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + seconds
+                            out_point = int(total_seconds * 30.0)
+                        except (ValueError, IndexError):
+                            pass
+            else:
+                try:
+                    out_point = int(out_str)
+                except ValueError:
+                    pass
 
         # Parse properties
         properties: dict[str, str] = {}

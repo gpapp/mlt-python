@@ -85,3 +85,44 @@ class TestMLTProject:
         assert loaded.profile.name == project.profile.name
         assert len(loaded.producers) == len(project.producers)
         assert len(loaded.playlists) == len(project.playlists)
+
+    def test_add_markers_and_save_copy(self, tmp_path) -> None:
+        """Test loading a project, adding markers, and saving as a copy."""
+        # Create and save initial project
+        project = MLTProject(profile="hd1080_30")
+        project.add_producer("video.mp4", id="vid1")
+        project.add_track("video", id="playlist0")
+        project.add_clip("playlist0", "vid1", start="00:00:00:00", duration="00:00:10:00")
+
+        file_path = tmp_path / "test.kdenlive.xml"
+        project.save(str(file_path))
+
+        # Load the project
+        loaded = MLTProject.load(str(file_path))
+        assert len(loaded.sequence_markers) == 0
+        assert len(loaded.clip_markers) == 0
+
+        # Add sequence markers (timeline guides)
+        loaded.add_marker("00:00:02:00", comment="Intro starts", marker_type=1)
+        loaded.add_marker("00:00:05:00", comment="Middle point", marker_type=2)
+
+        # Add clip marker
+        loaded.add_marker("00:00:01:00", comment="Clip highlight", producer_id="vid1")
+
+        # Verify markers were added
+        assert len(loaded.sequence_markers) == 2
+        assert "vid1" in loaded.clip_markers
+        assert len(loaded.clip_markers["vid1"]) == 1
+
+        # Save as a copy (use kdenlive_format to save markers)
+        copy_path = tmp_path / "test_with_markers.kdenlive.xml"
+        loaded.save(str(copy_path), kdenlive_format=True)
+
+        # Load the copy and verify markers persist
+        copied = MLTProject.load(str(copy_path))
+        assert len(copied.sequence_markers) == 2
+        assert copied.sequence_markers[0].comment == "Intro starts"
+        assert copied.sequence_markers[0].pos == 60  # 2 seconds * 30 fps
+        assert "vid1" in copied.clip_markers
+        assert len(copied.clip_markers["vid1"]) == 1
+        assert copied.clip_markers["vid1"][0].comment == "Clip highlight"

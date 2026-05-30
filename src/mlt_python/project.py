@@ -581,6 +581,10 @@ class MLTProject:
                 chain_id = f"chain{self._chain_counter}"
                 producer_to_chain[producer.id] = chain_id
                 chain_elem = producer.to_xml_chain(fps=self.profile.fps, chain_id=chain_id)
+                # Store the producer ID for loading
+                from xml.etree import ElementTree as _ET
+                prop = _ET.SubElement(chain_elem, "property", {"name": "kdenlive:originalprod"})
+                prop.text = producer.id
                 # Attach clip markers if any
                 clip_mkrs = self.clip_markers.get(producer.id, [])
                 if clip_mkrs:
@@ -1111,12 +1115,41 @@ class MLTProject:
 
         project = cls(profile=profile, version=version)
 
-        for elem in root.findall("producer"):
-            producer = Producer.from_xml(elem)
-            project.producers[producer.id] = producer
+        # Check if this is Kdenlive format (has chain elements)
+        has_chains = len(root.findall("chain")) > 0
+        
+        if has_chains:
+            # Kdenlive format: load producers from chain elements
+            for chain_elem in root.findall("chain"):
+                producer_id = None
+                # Get the original producer ID from kdenlive:originalprod
+                for prop in chain_elem.findall("property"):
+                    if prop.get("name") == "kdenlive:originalprod":
+                        producer_id = prop.text
+                        break
+                
+                if producer_id is None:
+                    # Try to get ID from kdenlive:id or use chain ID
+                    producer_id = chain_elem.get("id", "")
+                
+                # Create producer from chain element
+                producer = Producer.from_xml(chain_elem)
+                if producer_id:
+                    producer.id = producer_id
+                project.producers[producer.id] = producer
+        else:
+            # Standard MLT format: load producers from producer elements
+            for elem in root.findall("producer"):
+                producer = Producer.from_xml(elem)
+                project.producers[producer.id] = producer
 
         for elem in root.findall("playlist"):
             playlist = Playlist.from_xml(elem)
+            # Set track_type based on kdenlive:audio_track property
+            if playlist.properties.get("kdenlive:audio_track") == "1":
+                playlist.set_property("kdenlive:track_type", "audio")
+            else:
+                playlist.set_property("kdenlive:track_type", "video")
             project.playlists[playlist.id] = playlist
 
         for tractor in root.findall("tractor"):
@@ -1135,6 +1168,42 @@ class MLTProject:
                     properties[name] = prop.text or ""
             if properties:
                 project.kdenlive = KdenliveProperties.from_xml_properties(properties)
+
+            # Load sequence markers from tractor properties
+            guides_json = properties.get("kdenlive:sequenceproperties.guides", "")
+            if guides_json:
+                try:
+                    project.sequence_markers = markers_from_json(guides_json)
+                except Exception:
+                    pass  # Invalid JSON, skip
+
+        # Load clip markers from chain elements
+        for chain_elem in root.findall("chain"):
+            chain_id = chain_elem.get("id", "")
+            # Find the producer that corresponds to this chain
+            # In kdenlive format, chains wrap producers
+            producer_id = None
+            for prop in chain_elem.findall("property"):
+                if prop.get("name") == "kdenlive:originalprod":
+                    producer_id = prop.text
+                    break
+            
+            if producer_id is None:
+                # Try to find by chain mapping (chain0 -> first producer, etc.)
+                # This is a simplification - in reality we'd need a proper mapping
+                pass
+            
+            # Check for clip markers property
+            for prop in chain_elem.findall("property"):
+                if prop.get("name") == "kdenlive:markers":
+                    markers_json = prop.text or ""
+                    if markers_json:
+                        try:
+                            markers = markers_from_json(markers_json)
+                            if producer_id:
+                                project.clip_markers[producer_id] = markers
+                        except Exception:
+                            pass  # Invalid JSON, skip
 
         return project
 

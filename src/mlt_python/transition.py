@@ -251,6 +251,7 @@ class Transitions:
         fps: float = 30.0,
         start_level: float = 0.0,
         end_level: float = 1.0,
+        kdenlive_audio: bool = False,
     ) -> Transition:
         """Create an audio mix transition.
 
@@ -263,6 +264,7 @@ class Transitions:
             fps: Frames per second
             start_level: Starting mix level (0.0 to 1.0)
             end_level: Ending mix level (0.0 to 1.0)
+            kdenlive_audio: If true, sets properties for Kdenlive audio mixing
 
         Returns:
             Mix transition
@@ -278,8 +280,50 @@ class Transitions:
         )
         t.set_property("start", str(start_level))
         t.set_property("end", str(end_level))
+        if kdenlive_audio:
+            t.set_property("always_active", "1")
+            t.set_property("accepts_blanks", "1")
+            t.set_property("sum", "1")
+            t.set_property("kdenlive_id", "mix")
         return t
 
+    @staticmethod
+    def qtblend(
+        a_track: int = 0,
+        b_track: int = 1,
+        start: str | None = None,
+        end: str | None = None,
+        duration: str | None = None,
+        fps: float = 30.0,
+    ) -> Transition:
+        """Create a qtblend transition (standard Kdenlive video blending).
+
+        Args:
+            a_track: Background track index
+            b_track: Foreground track index
+            start: Start timecode
+            end: End timecode
+            duration: Duration timecode
+            fps: Frames per second
+
+        Returns:
+            qtblend transition
+        """
+        t = Transition.from_timecode(
+            mlt_service="qtblend",
+            a_track=a_track,
+            b_track=b_track,
+            start=start,
+            end=end,
+            duration=duration,
+            fps=fps,
+        )
+        t.set_property("compositing", "0")
+        t.set_property("distort", "0")
+        t.set_property("rotate_center", "0")
+        t.set_property("always_active", "1")
+        t.set_property("kdenlive_id", "qtblend")
+        return t
     @staticmethod
     def composite(
         a_track: int = 0,

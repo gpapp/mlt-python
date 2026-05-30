@@ -225,6 +225,49 @@ class TestSampleFiles:
         project.save(str(output_path), kdenlive_format=True, root_path=str(TEST_DATA_DIR))
         assert output_path.exists()
 
+    def test_07_add_markers(self) -> None:
+        """Load the file from test 6 and add markers, then save as copy."""
+        # Load the file created in test_06
+        input_path = OUTPUT_DIR / "06_alternating_segments.kdenlive"
+        assert input_path.exists(), "test_06 output file not found"
+        
+        project = MLTProject.load(str(input_path))
+        
+        # Verify initial state
+        assert len(project.sequence_markers) == 0
+        assert len(project.clip_markers) == 0
+        
+        # Add sequence markers (timeline guides)
+        project.add_marker("00:01:00:00", comment="Minute 1", marker_type=1)
+        project.add_marker("00:03:00:00", comment="Minute 3", marker_type=2)
+        project.add_marker("00:06:00:00", comment="End", marker_type=3)
+        
+        # Add clip markers to audio producers
+        project.add_marker("00:00:30:00", comment="Audio1 highlight", producer_id="audio1")
+        project.add_marker("00:02:30:00", comment="Audio2 highlight", producer_id="audio2")
+        
+        # Verify markers were added
+        assert len(project.sequence_markers) == 3
+        assert "audio1" in project.clip_markers
+        assert "audio2" in project.clip_markers
+        assert len(project.clip_markers["audio1"]) == 1
+        assert len(project.clip_markers["audio2"]) == 1
+        
+        # Save as a copy with markers
+        output_path = OUTPUT_DIR / "07_with_markers.kdenlive"
+        project.save(str(output_path), kdenlive_format=True, root_path=str(TEST_DATA_DIR))
+        assert output_path.exists()
+        
+        # Load the copy and verify markers persist
+        copied = MLTProject.load(str(output_path))
+        assert len(copied.sequence_markers) == 3
+        assert copied.sequence_markers[0].comment == "Minute 1"
+        assert copied.sequence_markers[0].pos == 1800  # 1 minute * 30 fps
+        assert "audio1" in copied.clip_markers
+        assert copied.clip_markers["audio1"][0].comment == "Audio1 highlight"
+        assert "audio2" in copied.clip_markers
+        assert copied.clip_markers["audio2"][0].comment == "Audio2 highlight"
+
     def test_filter_id_continuity(self) -> None:
         """Test that filter IDs are unique and form a continuous sequence."""
         import xml.etree.ElementTree as ET
