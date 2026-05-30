@@ -132,6 +132,17 @@ class Profile:
 
     # Common profile presets
     @classmethod
+    def hd1080_60(cls) -> "Profile":
+        """Full HD 1080p at 60fps."""
+        return cls(
+            name="hd1080_60",
+            width=1920,
+            height=1080,
+            frame_rate_num=60,
+            frame_rate_den=1,
+        )
+
+    @classmethod
     def hd1080_30(cls) -> "Profile":
         """Full HD 1080p at 30fps."""
         return cls(

@@ -2,6 +2,7 @@
 
 Represents a playlist in MLT, which acts as a track in the timeline.
 A playlist contains clips (entries) and blanks in a specific order.
+All time positions are stored as timecode strings (HH:MM:SS:FF).
 """
 
 from typing import Optional
@@ -47,67 +48,45 @@ class Playlist:
     def add_clip(
         self,
         producer_id: str,
-        in_point: int = 0,
-        out_point: int | None = None,
-        length: int | None = None,
-        position: int | None = None,
-    ) -> Clip:
-        """Add a clip to the playlist.
-
-        Args:
-            producer_id: ID of the producer to reference
-            in_point: Start frame within the producer
-            out_point: End frame (inclusive). If None and length not provided,
-                       uses producer's full length
-            length: Length in frames (alternative to out_point)
-            position: Insert position (default: append to end)
-
-        Returns:
-            The created Clip object
-        """
-        if out_point is not None:
-            clip = Clip(producer_id, in_point, out_point)
-        elif length is not None:
-            clip = Clip(producer_id, in_point, in_point + length - 1)
-        else:
-            clip = Clip(producer_id, in_point)
-
-        if position is None:
-            self.clips.append(clip)
-        else:
-            self.clips.insert(position, clip)
-
-        return clip
-
-    def add_clip_timecode(
-        self,
-        producer_id: str,
-        start: str,
+        in_point: str | None = None,
+        out_point: str | None = None,
         end: str | None = None,
         duration: str | None = None,
-        fps: float = 30.0,
         position: int | None = None,
+        fps: float = 30.0,
     ) -> Clip:
-        """Add a clip using timecode format (HH:MM:SS:FF).
+        """Add a clip to the playlist using timecodes.
+
+        Exactly one of ``out_point``, ``end``, or ``duration`` must be
+        provided (or ``out_point`` alone for an open-ended clip).
 
         Args:
             producer_id: ID of the producer to reference
-            start: Start timecode (HH:MM:SS:FF)
-            end: End timecode (HH:MM:SS:FF), exclusive
-            duration: Duration timecode (alternative to end)
-            fps: Frames per second for conversion
-            position: Insert position (default: append)
+            in_point: Start timecode (HH:MM:SS:FF). Defaults to ``00:00:00:00``.
+            out_point: End timecode (HH:MM:SS:FF), **inclusive**.
+            end: End timecode (HH:MM:SS:FF), **exclusive** (1 frame beyond last).
+            duration: Duration timecode (HH:MM:SS:FF).
+            position: Insert position (default: append to end).
+            fps: Frames per second (required when ``end`` or ``duration`` is used).
 
         Returns:
             The created Clip object
         """
-        clip = Clip.from_timecode(
-            producer_id=producer_id,
-            start_time=start,
-            end_time=end,
-            duration=duration,
-            fps=fps,
-        )
+        if in_point is None:
+            in_point = "00:00:00:00"
+
+        if out_point is None:
+            if end is not None:
+                end_f = Timecode.from_string(end, fps).to_frames()
+                out_f = max(0, end_f - 1)
+                out_point = str(Timecode.from_frames(out_f, fps))
+            elif duration is not None:
+                in_f = Timecode.from_string(in_point, fps).to_frames()
+                dur_f = Timecode.from_string(duration, fps).to_frames()
+                out_f = in_f + dur_f - 1
+                out_point = str(Timecode.from_frames(out_f, fps))
+
+        clip = Clip(producer_id, in_point=in_point, out_point=out_point)
 
         if position is None:
             self.clips.append(clip)
@@ -116,40 +95,24 @@ class Playlist:
 
         return clip
 
-    def add_blank(self, length: int, position: int | None = None) -> Blank:
-        """Add a blank space to the playlist.
-
-        Args:
-            length: Length in frames
-            position: Insert position (default: append)
-
-        Returns:
-            The created Blank object
-        """
-        blank = Blank(length)
-        if position is None:
-            self.clips.append(blank)
-        else:
-            self.clips.insert(position, blank)
-        return blank
-
-    def add_blank_timecode(
+    def add_blank(
         self,
         timecode: str,
-        fps: float = 30.0,
         position: int | None = None,
+        fps: float = 30.0,
     ) -> Blank:
-        """Add a blank using timecode duration.
+        """Add a blank space to the playlist using a timecode duration.
 
         Args:
             timecode: Duration in HH:MM:SS:FF format
-            fps: Frames per second
             position: Insert position (default: append)
+            fps: Frames per second (for validation only)
 
         Returns:
             The created Blank object
         """
-        blank = Blank.from_timecode(timecode, fps)
+        _ = Timecode.from_string(timecode, fps)  # validate
+        blank = Blank(timecode)
         if position is None:
             self.clips.append(blank)
         else:
@@ -173,8 +136,11 @@ class Playlist:
         """Remove all clips from the playlist."""
         self.clips.clear()
 
-    def get_duration_frames(self) -> int:
+    def get_duration_frames(self, fps: float = 30.0) -> int:
         """Get the total duration of the playlist in frames.
+
+        Args:
+            fps: Frames per second for timecode conversion
 
         Returns:
             Total duration in frames
@@ -182,13 +148,12 @@ class Playlist:
         duration = 0
         for item in self.clips:
             if isinstance(item, Clip):
-                if item.out_point is not None:
-                    duration += item.out_point - item.in_point + 1
-                else:
-                    # If no out_point, assume 0 length for now
-                    pass
+                if item.in_point is not None and item.out_point is not None:
+                    in_f = Timecode.from_string(item.in_point, fps).to_frames()
+                    out_f = Timecode.from_string(item.out_point, fps).to_frames()
+                    duration += out_f - in_f + 1
             elif isinstance(item, Blank):
-                duration += item.length
+                duration += Timecode.from_string(item.length, fps).to_frames()
         return duration
 
     def get_duration_timecode(self, fps: float) -> str:
@@ -200,7 +165,19 @@ class Playlist:
         Returns:
             Duration in HH:MM:SS:FF format
         """
-        return str(Timecode.from_frames(self.get_duration_frames(), fps))
+        return str(Timecode.from_frames(self.get_duration_frames(fps), fps))
+
+    def get_property(self, name: str, default: str | None = None) -> str | None:
+        """Get an MLT property value.
+
+        Args:
+            name: Property name
+            default: Default value if property doesn't exist
+
+        Returns:
+            Property value or default
+        """
+        return self.properties.get(name, default)
 
     def set_property(self, name: str, value: str) -> None:
         """Set an MLT property on the playlist.
@@ -225,26 +202,25 @@ class Playlist:
         Args:
             producer_to_chain: Optional mapping from producer ID to chain ID.
                              If provided, clip references will use chain IDs.
-            fps: Optional frames per second for timecode conversion.
+            fps: Frames per second (passed to ``Blank.to_xml`` for blank
+                 length conversion).
 
         Returns:
             XML Element representing the playlist
         """
         elem = ET.Element("playlist", {"id": self.id})
 
-        # Add properties
         for name, value in self.properties.items():
             prop = ET.SubElement(elem, "property", {"name": name})
             prop.text = value
 
-        # Add clips and blanks
         for item in self.clips:
             if isinstance(item, Clip):
-                xml_elem = item.to_xml(fps=fps)
+                xml_elem = item.to_xml()
                 if producer_to_chain and item.producer_id in producer_to_chain:
                     xml_elem.set("producer", producer_to_chain[item.producer_id])
             else:
-                xml_elem = item.to_xml()
+                xml_elem = item.to_xml(fps=fps or 30.0)
             elem.append(xml_elem)
 
         return elem
@@ -263,7 +239,6 @@ class Playlist:
         properties: dict[str, str] = {}
         clips: list[Clip | Blank] = []
 
-        # Parse properties and entries
         for child in elem:
             if child.tag == "property":
                 name = child.get("name", "")

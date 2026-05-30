@@ -10,6 +10,7 @@ from typing import Optional
 from xml.etree import ElementTree as ET
 from xml.dom import minidom
 import uuid
+import time
 
 from .profile import Profile
 from .producer import Producer
@@ -92,6 +93,7 @@ class MLTProject:
             ValueError: If preset name not found
         """
         presets = {
+            "hd1080_60": Profile.hd1080_60,
             "hd1080_30": Profile.hd1080_30,
             "hd1080_2997": Profile.hd1080_2997,
             "hd1080_25": Profile.hd1080_25,
@@ -225,22 +227,21 @@ class MLTProject:
         if producer_id not in self.producers:
             raise KeyError(f"Producer not found: {producer_id}")
 
-        # Calculate in/out points from timecodes
-        start_tc = Timecode.from_string(start, self.profile.fps)
-        in_point = start_tc.to_frames()
+        out_point = None
 
         if end is not None:
             end_tc = Timecode.from_string(end, self.profile.fps)
-            out_point = end_tc.to_frames() - 1  # MLT out is inclusive
+            out_frames = end_tc.to_frames() - 1  # MLT out is inclusive
+            out_point = str(Timecode.from_frames(max(0, out_frames), self.profile.fps))
         elif duration is not None:
+            start_tc = Timecode.from_string(start, self.profile.fps)
             dur_tc = Timecode.from_string(duration, self.profile.fps)
-            out_point = in_point + dur_tc.to_frames() - 1
-        else:
-            out_point = None
+            out_frames = start_tc.to_frames() + dur_tc.to_frames() - 1
+            out_point = str(Timecode.from_frames(out_frames, self.profile.fps))
 
         clip = Clip(
             producer_id=producer_id,
-            in_point=in_point,
+            in_point=start,
             out_point=out_point,
         )
 
@@ -484,8 +485,9 @@ class MLTProject:
             Total duration in frames
         """
         max_duration = 0
+        fps = self.profile.fps
         for playlist in self.playlists.values():
-            duration_frames = playlist.get_duration_frames()
+            duration_frames = playlist.get_duration_frames(fps)
             max_duration = max(max_duration, duration_frames)
         return max_duration
 
@@ -518,13 +520,15 @@ class MLTProject:
 
     def _get_timeline_duration(self) -> str:
         """Get the duration of the timeline in timestamp format."""
-        max_duration = 0
+        max_frames = 0
+        fps = self.profile.fps
         for playlist in self.playlists.values():
             for clip in playlist.clips:
-                if clip.out_point and clip.out_point > max_duration:
-                    max_duration = clip.out_point
-        fps = self.profile.fps
-        total_seconds = max_duration / fps if max_duration > 0 else 0
+                if isinstance(clip, Clip) and clip.out_point is not None:
+                    cf = Timecode.from_string(clip.out_point, fps).to_frames()
+                    if cf > max_frames:
+                        max_frames = cf
+        total_seconds = max_frames / fps if max_frames > 0 else 0
         hours = int(total_seconds // 3600)
         minutes = int((total_seconds % 3600) // 60)
         seconds = total_seconds % 60
@@ -580,10 +584,17 @@ class MLTProject:
             for producer in self.producers.values():
                 chain_id = f"chain{self._chain_counter}"
                 producer_to_chain[producer.id] = chain_id
-                chain_elem = producer.to_xml_chain(fps=self.profile.fps, chain_id=chain_id)
-                # Store the producer ID for loading
-                from xml.etree import ElementTree as _ET
-                prop = _ET.SubElement(chain_elem, "property", {"name": "kdenlive:originalprod"})
+                # Determine kdenlive_mode based on producer properties for to_xml_chain
+                kdenlive_mode = None
+                if producer.get_property("video_index") == "-1": # Audio-only clip
+                    kdenlive_mode = "audio"
+                elif producer.get_property("audio_index") == "-1": # Video-only clip
+                    kdenlive_mode = "video"
+                # If both are present, it's a combined AV clip, kdenlive_mode can be None
+
+                chain_elem = producer.to_xml_chain(fps=self.profile.fps, chain_id=chain_id, kdenlive_mode=kdenlive_mode)
+                # Store the producer ID for loading                
+                prop = ET.SubElement(chain_elem, "property", {"name": "kdenlive:originalprod"}) # Use ET from current scope
                 prop.text = producer.id
                 # Attach clip markers if any
                 clip_mkrs = self.clip_markers.get(producer.id, [])
@@ -643,7 +654,6 @@ class MLTProject:
             prop.text = sess_uuid
             prop = ET.SubElement(main_bin, "property", {"name": "kdenlive:docproperties.uuid"})
             prop.text = sequence_uuid
-            import time
             prop = ET.SubElement(main_bin, "property", {"name": "kdenlive:docproperties.documentid"})
             prop.text = str(int(time.time() * 1000))
             prop = ET.SubElement(main_bin, "property", {"name": "kdenlive:docproperties.enableproxy"})
@@ -824,6 +834,9 @@ class MLTProject:
                 if track_type == "audio":
                     prop = ET.SubElement(tractor, "property", {"name": "kdenlive:audio_track"})
                     prop.text = "1"
+                track_name_prop = playlist.properties.get("kdenlive:track_name")
+                if track_name_prop:
+                    ET.SubElement(tractor, "property", {"name": "kdenlive:track_name"}).text = track_name_prop
                 prop = ET.SubElement(tractor, "property", {"name": "kdenlive:trackheight"})
                 prop.text = "64"
                 prop = ET.SubElement(tractor, "property", {"name": "kdenlive:timeline_active"})
@@ -935,7 +948,12 @@ class MLTProject:
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.scrollPos"})
             prop.text = "0"
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.tracks"})
-            prop.text = str(len(self.playlists))
+
+            # Rule: tracks property usually matches Number of Video tracks + 1 (for background).
+            # Use track_type_map as properties are popped from playlist objects during XML generation.
+            video_track_count = sum(1 for ttype in track_type_map.values() if ttype == "video")
+            prop.text = str(video_track_count + 1)
+
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.verticalzoom"})
             prop.text = "1"
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.videoTarget"})
@@ -947,7 +965,8 @@ class MLTProject:
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.zoom"})
             prop.text = "8"
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.groups"})
-            prop.text = "[\n]"
+            # Retrieve groups from doc_properties if set by exporter
+            prop.text = self.kdenlive.get_doc_property("sequenceproperties.groups", "[\n]")
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.guides"})
             if self.sequence_markers:
                 prop.text = markers_to_json(self.sequence_markers)

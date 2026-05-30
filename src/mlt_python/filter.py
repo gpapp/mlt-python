@@ -2,6 +2,7 @@
 
 Represents MLT filters/effects that can be applied to producers,
 playlists, or tracks. Filters modify the audio or video stream.
+In/out points are stored as timecode strings (HH:MM:SS:FF).
 """
 
 from typing import Optional
@@ -20,8 +21,8 @@ class Filter:
         id: Unique identifier for the filter
         mlt_service: MLT filter service name (e.g., "greyscale", "volume")
         track: Track index this filter applies to (None = all tracks)
-        in_point: Start frame for filter application
-        out_point: End frame for filter application (inclusive)
+        in_point: Start timecode for filter application
+        out_point: End timecode for filter application (inclusive)
         properties: Filter-specific properties
     """
 
@@ -30,8 +31,8 @@ class Filter:
         mlt_service: str,
         id: str | None = None,
         track: int | None = None,
-        in_point: int | None = None,
-        out_point: int | None = None,
+        in_point: str | None = None,
+        out_point: str | None = None,
         properties: dict[str, str] | None = None,
     ) -> None:
         """Initialize a Filter.
@@ -40,8 +41,8 @@ class Filter:
             mlt_service: MLT filter service name
             id: Unique identifier (auto-generated if None)
             track: Track index (0-based, None = all)
-            in_point: Start frame
-            out_point: End frame (inclusive)
+            in_point: Start timecode (HH:MM:SS:FF)
+            out_point: End timecode (HH:MM:SS:FF, inclusive)
             properties: Filter-specific properties
         """
         self.id = id
@@ -51,7 +52,6 @@ class Filter:
         self.out_point = out_point
         self.properties: dict[str, str] = properties or {}
 
-        # Set mlt_service in properties if not already set
         if "mlt_service" not in self.properties:
             self.properties["mlt_service"] = mlt_service
 
@@ -84,15 +84,17 @@ class Filter:
         out_point = None
 
         if start is not None:
-            start_tc = Timecode.from_string(start, fps)
-            in_point = start_tc.to_frames()
+            in_point = start
 
         if end is not None:
             end_tc = Timecode.from_string(end, fps)
-            out_point = end_tc.to_frames() - 1  # MLT out is inclusive
+            end_frames = end_tc.to_frames() - 1  # MLT out is inclusive
+            out_point = str(Timecode.from_frames(end_frames, fps))
         elif duration is not None and in_point is not None:
+            in_tc = Timecode.from_string(in_point, fps)
             dur_tc = Timecode.from_string(duration, fps)
-            out_point = in_point + dur_tc.to_frames() - 1
+            out_frames = in_tc.to_frames() + dur_tc.to_frames() - 1
+            out_point = str(Timecode.from_frames(out_frames, fps))
 
         return cls(
             mlt_service=mlt_service,
@@ -126,6 +128,9 @@ class Filter:
     def to_xml(self) -> ET.Element:
         """Generate XML element for this filter.
 
+        In/out points are serialised as frame numbers (MLT XML convention
+        for filters).
+
         Returns:
             XML Element representing the filter
         """
@@ -136,13 +141,12 @@ class Filter:
         if self.track is not None:
             attrs["track"] = str(self.track)
         if self.in_point is not None:
-            attrs["in"] = str(self.in_point)
+            attrs["in"] = self.in_point
         if self.out_point is not None:
-            attrs["out"] = str(self.out_point)
+            attrs["out"] = self.out_point
 
         elem = ET.Element("filter", attrs)
 
-        # Add properties
         for name, value in self.properties.items():
             prop = ET.SubElement(elem, "property", {"name": name})
             prop.text = value
@@ -162,17 +166,15 @@ class Filter:
         id = elem.get("id")
         mlt_service = elem.get("mlt_service", "")
         track = int(elem.get("track", "0")) if elem.get("track") else None
-        in_point = int(elem.get("in", "0")) if elem.get("in") else None
-        out_point = int(elem.get("out", "0")) if elem.get("out") else None
+        in_point = elem.get("in")
+        out_point = elem.get("out")
 
-        # Parse properties
         properties: dict[str, str] = {}
         for prop in elem.findall("property"):
             name = prop.get("name", "")
             if name:
                 properties[name] = prop.text or ""
 
-        # Get mlt_service from properties if not in attrs
         if not mlt_service and "mlt_service" in properties:
             mlt_service = properties["mlt_service"]
 
@@ -189,7 +191,6 @@ class Filter:
         return f"Filter(service='{self.mlt_service}', track={self.track})"
 
 
-# Common filter factory methods
 class Filters:
     """Factory class for common MLT filters."""
 
@@ -201,18 +202,7 @@ class Filters:
         duration: str | None = None,
         fps: float = 30.0,
     ) -> Filter:
-        """Create a greyscale filter.
-
-        Args:
-            track: Track index (None = all)
-            start: Start timecode
-            end: End timecode
-            duration: Duration timecode
-            fps: Frames per second
-
-        Returns:
-            Greyscale filter
-        """
+        """Create a greyscale filter."""
         return Filter.from_timecode(
             mlt_service="greyscale",
             start=start,
@@ -231,19 +221,7 @@ class Filters:
         duration: str | None = None,
         fps: float = 30.0,
     ) -> Filter:
-        """Create a volume filter.
-
-        Args:
-            level: Volume level (0.0 to 1.0)
-            track: Track index
-            start: Start timecode
-            end: End timecode
-            duration: Duration timecode
-            fps: Frames per second
-
-        Returns:
-            Volume filter
-        """
+        """Create a volume filter."""
         f = Filter.from_timecode(
             mlt_service="volume",
             start=start,
@@ -264,19 +242,7 @@ class Filters:
         duration: str | None = None,
         fps: float = 30.0,
     ) -> Filter:
-        """Create a watermark filter.
-
-        Args:
-            resource: Path to watermark image
-            track: Track index
-            start: Start timecode
-            end: End timecode
-            duration: Duration timecode
-            fps: Frames per second
-
-        Returns:
-            Watermark filter
-        """
+        """Create a watermark filter."""
         f = Filter.from_timecode(
             mlt_service="watermark",
             start=start,
@@ -301,23 +267,7 @@ class Filters:
         font_size: str = "48",
         font_colour: str = "0xffffffff",
     ) -> Filter:
-        """Create a subtitle filter referencing an external SRT file.
-
-        Args:
-            resource: Path to SRT subtitle file
-            track: Track index
-            start: Start timecode
-            end: End timecode
-            duration: Duration timecode
-            fps: Frames per second
-            geometry: Subtitle position geometry
-            font_family: Font family
-            font_size: Font size
-            font_colour: Font colour (hex with alpha)
-
-        Returns:
-            Subtitle filter
-        """
+        """Create a subtitle filter."""
         f = Filter.from_timecode(
             mlt_service="subtitle",
             start=start,

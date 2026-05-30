@@ -107,6 +107,15 @@ class Timecode:
         total_seconds = self.hours * 3600 + self.minutes * 60 + self.seconds
         return int(total_seconds * self.fps) + self.frames
 
+    def to_seconds(self) -> float:
+        """Convert timecode to floating-point seconds.
+
+        Returns:
+            Seconds
+        """
+        total_seconds = self.hours * 3600 + self.minutes * 60 + self.seconds
+        return total_seconds + self.frames / self.fps
+
     def to_string(self) -> str:
         """Convert to HH:MM:SS:FF string format.
 

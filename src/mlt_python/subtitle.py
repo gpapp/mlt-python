@@ -74,8 +74,8 @@ class SubtitleTrack:
     Attributes:
         resource: Path to the SRT file
         track: Track index this subtitle applies to
-        start_frame: Start frame for subtitle display
-        end_frame: End frame for subtitle display (optional)
+        start_timecode: Start timecode (HH:MM:SS:FF) for subtitle display
+        end_timecode: End timecode (HH:MM:SS:FF) for subtitle display (optional)
         properties: Additional filter properties (geometry, font, etc.)
     """
 
@@ -83,8 +83,8 @@ class SubtitleTrack:
         self,
         resource: str,
         track: int = 0,
-        start_frame: int | None = None,
-        end_frame: int | None = None,
+        start_timecode: str | None = None,
+        end_timecode: str | None = None,
         properties: dict[str, str] | None = None,
     ) -> None:
         """Initialize a SubtitleTrack.
@@ -92,14 +92,14 @@ class SubtitleTrack:
         Args:
             resource: Path to SRT file
             track: Track index
-            start_frame: Start frame (optional)
-            end_frame: End frame (optional)
+            start_timecode: Start timecode (HH:MM:SS:FF) (optional)
+            end_timecode: End timecode (HH:MM:SS:FF) (optional)
             properties: Additional filter properties
         """
         self.resource = resource
         self.track = track
-        self.start_frame = start_frame
-        self.end_frame = end_frame
+        self.start_timecode = start_timecode
+        self.end_timecode = end_timecode
         self.properties: dict[str, str] = properties or {}
 
         # Set defaults for subtitle filter
@@ -135,7 +135,7 @@ class SubtitleTrack:
             srt_file: Path to SRT file
             track: Track index
             start: Start timecode (HH:MM:SS:FF)
-            end: End timecode (HH:MM:SS:FF)
+            end: End timecode (HH:MM:SS:FF), exclusive
             duration: Duration timecode (alternative to end)
             fps: Frames per second
             font_family: Font family
@@ -145,19 +145,18 @@ class SubtitleTrack:
         Returns:
             SubtitleTrack object
         """
-        start_frame = None
-        end_frame = None
-
-        if start is not None:
-            start_tc = Timecode.from_string(start, fps)
-            start_frame = start_tc.to_frames()
+        start_timecode = start
+        end_timecode = None
 
         if end is not None:
             end_tc = Timecode.from_string(end, fps)
-            end_frame = end_tc.to_frames() - 1  # MLT out is inclusive
-        elif duration is not None and start_frame is not None:
+            end_frames = end_tc.to_frames() - 1  # MLT out is inclusive
+            end_timecode = str(Timecode.from_frames(end_frames, fps))
+        elif duration is not None and start_timecode is not None:
+            start_tc = Timecode.from_string(start_timecode, fps)
             dur_tc = Timecode.from_string(duration, fps)
-            end_frame = start_frame + dur_tc.to_frames() - 1
+            out_frames = start_tc.to_frames() + dur_tc.to_frames() - 1
+            end_timecode = str(Timecode.from_frames(out_frames, fps))
 
         properties = {
             "family": font_family,
@@ -168,8 +167,8 @@ class SubtitleTrack:
         return cls(
             resource=srt_file,
             track=track,
-            start_frame=start_frame,
-            end_frame=end_frame,
+            start_timecode=start_timecode,
+            end_timecode=end_timecode,
             properties=properties,
         )
 
@@ -182,10 +181,10 @@ class SubtitleTrack:
         attrs: dict[str, str] = {"mlt_service": "subtitle"}
         if self.track is not None:
             attrs["track"] = str(self.track)
-        if self.start_frame is not None:
-            attrs["in"] = str(self.start_frame)
-        if self.end_frame is not None:
-            attrs["out"] = str(self.end_frame)
+        if self.start_timecode is not None:
+            attrs["in"] = self.start_timecode
+        if self.end_timecode is not None:
+            attrs["out"] = self.end_timecode
 
         elem = ET.Element("filter", attrs)
 
