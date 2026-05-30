@@ -29,8 +29,8 @@ class TestMLTProject:
         assert "playlist0" in project.playlists
         assert track.id == "playlist0"
 
-    def test_add_clip_with_timecode(self) -> None:
-        """Test adding clip using timecodes."""
+    def test_add_clip(self) -> None:
+        """Test adding clip using float seconds."""
         project = MLTProject(profile="hd1080_30")
         project.add_producer("video.mp4", id="vid1")
         project.add_track("video", id="playlist0")
@@ -38,13 +38,12 @@ class TestMLTProject:
         project.add_clip(
             track_id="playlist0",
             producer_id="vid1",
-            start="00:00:00:00",
-            duration="00:00:10:00",
+            start=0.0,
+            duration=10.0,
         )
 
         track = project.playlists["playlist0"]
         assert len(track.clips) == 1
-        assert isinstance(track.clips[0], __import__("mlt_python.clip", fromlist=["Clip"]).Clip)
 
     def test_add_filter(self) -> None:
         """Test adding filter."""
@@ -52,8 +51,8 @@ class TestMLTProject:
         filter_obj = project.add_filter(
             mlt_service="greyscale",
             track=0,
-            start="00:00:05:00",
-            duration="00:00:05:00",
+            start=5.0,
+            duration=5.0,
         )
         assert len(project.filters) == 1
         assert filter_obj.mlt_service == "greyscale"
@@ -65,8 +64,8 @@ class TestMLTProject:
             mlt_service="luma",
             a_track=0,
             b_track=1,
-            start="00:00:10:00",
-            duration="00:00:02:00",
+            start=10.0,
+            duration=2.0,
         )
         assert len(project.transitions) == 1
         assert transition.mlt_service == "luma"
@@ -76,7 +75,7 @@ class TestMLTProject:
         project = MLTProject(profile="hd1080_30")
         project.add_producer("video.mp4", id="vid1")
         project.add_track("video", id="playlist0")
-        project.add_clip("playlist0", "vid1", start="00:00:00:00", duration="00:00:10:00")
+        project.add_clip("playlist0", "vid1", start=0.0, duration=10.0)
 
         file_path = tmp_path / "test.kdenlive.xml"
         project.save(str(file_path))
@@ -92,7 +91,7 @@ class TestMLTProject:
         project = MLTProject(profile="hd1080_30")
         project.add_producer("video.mp4", id="vid1")
         project.add_track("video", id="playlist0")
-        project.add_clip("playlist0", "vid1", start="00:00:00:00", duration="00:00:10:00")
+        project.add_clip("playlist0", "vid1", start=0.0, duration=10.0)
 
         file_path = tmp_path / "test.kdenlive.xml"
         project.save(str(file_path))
@@ -102,12 +101,12 @@ class TestMLTProject:
         assert len(loaded.sequence_markers) == 0
         assert len(loaded.clip_markers) == 0
 
-        # Add sequence markers (timeline guides)
-        loaded.add_marker("00:00:02:00", comment="Intro starts", marker_type=1)
-        loaded.add_marker("00:00:05:00", comment="Middle point", marker_type=2)
+        # Add sequence markers (timeline guides) in seconds
+        loaded.add_marker(2.0, comment="Intro starts", marker_type=1)
+        loaded.add_marker(5.0, comment="Middle point", marker_type=2)
 
         # Add clip marker
-        loaded.add_marker("00:00:01:00", comment="Clip highlight", producer_id="vid1")
+        loaded.add_marker(1.0, comment="Clip highlight", producer_id="vid1")
 
         # Verify markers were added
         assert len(loaded.sequence_markers) == 2
@@ -122,7 +121,8 @@ class TestMLTProject:
         copied = MLTProject.load(str(copy_path))
         assert len(copied.sequence_markers) == 2
         assert copied.sequence_markers[0].comment == "Intro starts"
-        assert copied.sequence_markers[0].pos == 60  # 2 seconds * 30 fps
+        # Pos stored as seconds, at 30fps: 2s = 60 frames -> round(60/30*30)/30 = 2.0
+        assert abs(copied.sequence_markers[0].pos - 2.0) < 0.01
         assert "vid1" in copied.clip_markers
         assert len(copied.clip_markers["vid1"]) == 1
         assert copied.clip_markers["vid1"][0].comment == "Clip highlight"

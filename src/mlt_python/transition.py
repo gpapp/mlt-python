@@ -2,7 +2,7 @@
 
 Represents MLT transitions between tracks (video wipes, audio mixes, etc.).
 Transitions work between two tracks (a_track and b_track) over a time range.
-In/out points are stored as timecode strings (HH:MM:SS:FF).
+In/out points are stored as float seconds internally.
 """
 
 from typing import Optional
@@ -23,8 +23,8 @@ class Transition:
         mlt_service: MLT transition service (luma, mix, composite, etc.)
         a_track: Source track index (background)
         b_track: Destination track index (foreground)
-        in_point: Start timecode
-        out_point: End timecode (inclusive)
+        in_point: Start time in seconds
+        out_point: End time in seconds (inclusive)
         properties: Transition-specific properties
     """
 
@@ -34,8 +34,8 @@ class Transition:
         a_track: int = 0,
         b_track: int = 1,
         id: str | None = None,
-        in_point: str | None = None,
-        out_point: str | None = None,
+        in_point: float | None = None,
+        out_point: float | None = None,
         properties: dict[str, str] | None = None,
     ) -> None:
         """Initialize a Transition.
@@ -45,8 +45,8 @@ class Transition:
             a_track: Source track index (default: 0)
             b_track: Destination track index (default: 1)
             id: Unique identifier (auto-generated if None)
-            in_point: Start timecode (HH:MM:SS:FF)
-            out_point: End timecode (HH:MM:SS:FF, inclusive)
+            in_point: Start time in seconds
+            out_point: End time in seconds (inclusive)
             properties: Transition-specific properties
         """
         self.id = id
@@ -66,22 +66,20 @@ class Transition:
         mlt_service: str,
         a_track: int = 0,
         b_track: int = 1,
-        start: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
-        fps: float = 30.0,
+        start: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
         properties: dict[str, str] | None = None,
     ) -> "Transition":
-        """Create a transition using timecode format (HH:MM:SS:FF).
+        """Create a transition using float seconds.
 
         Args:
             mlt_service: MLT transition service name
             a_track: Source track index
             b_track: Destination track index
-            start: Start timecode (HH:MM:SS:FF)
-            end: End timecode (HH:MM:SS:FF), exclusive
-            duration: Duration timecode (alternative to end)
-            fps: Frames per second
+            start: Start time in seconds
+            end: End time in seconds, exclusive
+            duration: Duration in seconds (alternative to end)
             properties: Additional properties
 
         Returns:
@@ -94,14 +92,9 @@ class Transition:
             in_point = start
 
         if end is not None:
-            end_tc = Timecode.from_string(end, fps)
-            end_frames = end_tc.to_frames() - 1  # MLT out is inclusive
-            out_point = str(Timecode.from_frames(end_frames, fps))
+            out_point = end  # end is exclusive, out is inclusive
         elif duration is not None and in_point is not None:
-            in_tc = Timecode.from_string(in_point, fps)
-            dur_tc = Timecode.from_string(duration, fps)
-            out_frames = in_tc.to_frames() + dur_tc.to_frames() - 1
-            out_point = str(Timecode.from_frames(out_frames, fps))
+            out_point = in_point + duration
 
         return cls(
             mlt_service=mlt_service,
@@ -133,8 +126,13 @@ class Transition:
         """
         return self.properties.get(name, default)
 
-    def to_xml(self) -> ET.Element:
+    def to_xml(self, fps: float | None = None) -> ET.Element:
         """Generate XML element for this transition.
+
+        In/out points are serialised as HH:MM:SS.mmm timecode strings.
+
+        Args:
+            fps: Ignored (timecodes are FPS-independent).
 
         Returns:
             XML Element representing the transition
@@ -147,9 +145,9 @@ class Transition:
         if self.id:
             attrs["id"] = self.id
         if self.in_point is not None:
-            attrs["in"] = self.in_point
+            attrs["in"] = str(Timecode.from_seconds(self.in_point))
         if self.out_point is not None:
-            attrs["out"] = self.out_point
+            attrs["out"] = str(Timecode.from_seconds(self.out_point))
 
         elem = ET.Element("transition", attrs)
 
@@ -173,8 +171,11 @@ class Transition:
         mlt_service = elem.get("mlt_service", "")
         a_track = int(elem.get("a_track", "0"))
         b_track = int(elem.get("b_track", "1"))
-        in_point = elem.get("in")
-        out_point = elem.get("out")
+        in_str = elem.get("in")
+        out_str = elem.get("out")
+
+        in_point = _parse_time_str(in_str) if in_str else None
+        out_point = _parse_time_str(out_str) if out_str else None
 
         properties: dict[str, str] = {}
         for prop in elem.findall("property"):
@@ -199,6 +200,52 @@ class Transition:
         return f"Transition(service='{self.mlt_service}', a={self.a_track}, b={self.b_track})"
 
 
+def _parse_time_str(s: str) -> float:
+    if ":" not in s:
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+    parts = s.split(":")
+    if len(parts) == 4 and "." in parts[3]:
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            sec_parts = parts[3].split(".")
+            seconds = int(sec_parts[0])
+            ms = int(sec_parts[1].ljust(3, "0")[:3])
+            return hours * 3600 + minutes * 60 + seconds + ms / 1000.0
+        except (ValueError, IndexError):
+            pass
+    if len(parts) == 3 and "." in parts[2]:
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            sec_parts = parts[2].split(".")
+            seconds = int(sec_parts[0])
+            ms = int(sec_parts[1].ljust(3, "0")[:3])
+            return hours * 3600 + minutes * 60 + seconds + ms / 1000.0
+        except (ValueError, IndexError):
+            pass
+    if len(parts) == 4:
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = int(parts[2])
+            return hours * 3600 + minutes * 60 + seconds
+        except ValueError:
+            pass
+    if len(parts) == 3:
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = int(parts[2])
+            return hours * 3600 + minutes * 60 + seconds
+        except ValueError:
+            pass
+    return 0.0
+
+
 class Transitions:
     """Factory class for common MLT transitions."""
 
@@ -206,10 +253,9 @@ class Transitions:
     def luma(
         a_track: int = 0,
         b_track: int = 1,
-        start: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
-        fps: float = 30.0,
+        start: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
         reverse: bool = False,
     ) -> Transition:
         """Create a luma (video wipe) transition."""
@@ -220,7 +266,6 @@ class Transitions:
             start=start,
             end=end,
             duration=duration,
-            fps=fps,
         )
         if reverse:
             t.set_property("reverse", "1")
@@ -230,10 +275,9 @@ class Transitions:
     def mix(
         a_track: int = 0,
         b_track: int = 1,
-        start: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
-        fps: float = 30.0,
+        start: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
         start_level: float = 0.0,
         end_level: float = 1.0,
         kdenlive_audio: bool = False,
@@ -246,7 +290,6 @@ class Transitions:
             start=start,
             end=end,
             duration=duration,
-            fps=fps,
         )
         t.set_property("start", str(start_level))
         t.set_property("end", str(end_level))
@@ -261,10 +304,9 @@ class Transitions:
     def qtblend(
         a_track: int = 0,
         b_track: int = 1,
-        start: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
-        fps: float = 30.0,
+        start: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
     ) -> Transition:
         """Create a qtblend transition."""
         t = Transition.from_timecode(
@@ -274,7 +316,6 @@ class Transitions:
             start=start,
             end=end,
             duration=duration,
-            fps=fps,
         )
         t.set_property("compositing", "0")
         t.set_property("distort", "0")
@@ -287,10 +328,9 @@ class Transitions:
     def composite(
         a_track: int = 0,
         b_track: int = 1,
-        start: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
-        fps: float = 30.0,
+        start: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
         geometry: str = "0%/0%:100%x100%",
     ) -> Transition:
         """Create a composite transition."""
@@ -301,7 +341,6 @@ class Transitions:
             start=start,
             end=end,
             duration=duration,
-            fps=fps,
         )
         t.set_property("geometry", geometry)
         return t

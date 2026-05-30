@@ -2,7 +2,7 @@
 
 Represents a clip entry in a playlist. Clips reference producers with
 specific in/out points to define which portion of the media to use.
-All time positions are stored as timecode strings (HH:MM:SS:FF).
+All time positions are stored as float seconds internally.
 """
 
 from typing import TYPE_CHECKING
@@ -21,8 +21,8 @@ class Clip:
 
     Attributes:
         producer_id: ID of the producer this clip references
-        in_point: Start timecode (HH:MM:SS:FF) within the producer
-        out_point: End timecode (HH:MM:SS:FF) within the producer (inclusive)
+        in_point: Start time in seconds within the producer
+        out_point: End time in seconds within the producer (inclusive)
         properties: Additional MLT properties for this clip entry
         filters: List of filters attached to this clip
     """
@@ -30,8 +30,8 @@ class Clip:
     def __init__(
         self,
         producer_id: str,
-        in_point: str | None = None,
-        out_point: str | None = None,
+        in_point: float | None = None,
+        out_point: float | None = None,
         properties: dict[str, str] | None = None,
         filters: list["Filter"] | None = None,
     ) -> None:
@@ -39,8 +39,8 @@ class Clip:
 
         Args:
             producer_id: ID of the producer to reference
-            in_point: Start timecode (HH:MM:SS:FF). Defaults to None (start of media).
-            out_point: End timecode (HH:MM:SS:FF, inclusive). Defaults to None.
+            in_point: Start time in seconds. Defaults to None (start of media).
+            out_point: End time in seconds (inclusive). Defaults to None.
             properties: Additional MLT properties for the entry element
             filters: Optional initial filters
         """
@@ -54,21 +54,21 @@ class Clip:
     def from_timecode(
         cls,
         producer_id: str,
-        start_time: str,
-        end_time: str | None = None,
-        duration: str | None = None,
-        fps: float = 30.0,
+        start_time: float,
+        end_time: float | None = None,
+        duration: float | None = None,
+        fps: float = 25.0,
         properties: dict[str, str] | None = None,
         filters: list["Filter"] | None = None,
     ) -> "Clip":
-        """Create a clip using timecode format (HH:MM:SS:FF).
+        """Create a clip using float seconds.
 
         Args:
             producer_id: ID of the producer to reference
-            start_time: Start timecode (HH:MM:SS:FF)
-            end_time: End timecode (HH:MM:SS:FF), exclusive
-            duration: Duration timecode (alternative to end)
-            fps: Frames per second for timecode conversion
+            start_time: Start time in seconds
+            end_time: End time in seconds, exclusive
+            duration: Duration in seconds (alternative to end)
+            fps: Video frame rate for inclusive-out adjustment (default 25.0)
             properties: Additional MLT properties
             filters: Optional initial filters
 
@@ -76,14 +76,9 @@ class Clip:
             Clip object
         """
         if end_time is not None:
-            end_tc = Timecode.from_string(end_time, fps)
-            end_frames = end_tc.to_frames() - 1  # MLT out is inclusive
-            out_point = str(Timecode.from_frames(end_frames, fps))
+            out_point = max(0.0, end_time - 1.0 / fps)
         elif duration is not None:
-            start_tc = Timecode.from_string(start_time, fps)
-            dur_tc = Timecode.from_string(duration, fps)
-            out_frames = start_tc.to_frames() + dur_tc.to_frames() - 1
-            out_point = str(Timecode.from_frames(out_frames, fps))
+            out_point = start_time + duration - 1.0 / fps
         else:
             out_point = None
 
@@ -95,53 +90,32 @@ class Clip:
             filters=filters,
         )
 
-    def get_duration_frames(self, fps: float) -> int | None:
-        """Get the clip duration in frames.
-
-        Args:
-            fps: Frames per second for timecode conversion
+    def get_duration(self) -> float | None:
+        """Get the clip duration in seconds.
 
         Returns:
-            Duration in frames, or None if out_point not set
+            Duration in seconds, or None if out_point not set
         """
         if self.out_point is None or self.in_point is None:
             return None
-        in_f = Timecode.from_string(self.in_point, fps).to_frames()
-        out_f = Timecode.from_string(self.out_point, fps).to_frames()
-        return out_f - in_f + 1
-
-    def get_duration_timecode(self, fps: float) -> str | None:
-        """Get the clip duration as a timecode string.
-
-        Args:
-            fps: Frames per second
-
-        Returns:
-            Duration in HH:MM:SS:FF format, or None
-        """
-        duration = self.get_duration_frames(fps)
-        if duration is None:
-            return None
-        return str(Timecode.from_frames(duration, fps))
+        return self.out_point - self.in_point
 
     def to_xml(self, fps: float | None = None) -> ET.Element:
         """Generate XML element for this clip entry.
 
-        Timecode strings are output directly as ``in`` and ``out`` attributes.
-        The ``fps`` parameter is accepted for API compatibility but not used,
-        since timecodes are already stored as strings.
+        Time values are converted to HH:MM:SS.mmm timecode strings.
 
         Args:
-            fps: Ignored (timecodes stored as strings).
+            fps: Ignored (timecodes are FPS-independent).
 
         Returns:
             XML Element representing the entry
         """
         attrs: dict[str, str] = {"producer": self.producer_id}
         if self.in_point is not None:
-            attrs["in"] = self.in_point
+            attrs["in"] = str(Timecode.from_seconds(self.in_point))
         if self.out_point is not None:
-            attrs["out"] = self.out_point
+            attrs["out"] = str(Timecode.from_seconds(self.out_point))
 
         elem = ET.Element("entry", attrs)
 
@@ -191,118 +165,139 @@ class Clip:
         return f"Clip(producer='{self.producer_id}', in={self.in_point}, out={self.out_point})"
 
 
-def _parse_time_str(s: str) -> str:
-    """Normalise a time string to HH:MM:SS:FF if possible.
+def _parse_time_str(s: str) -> float:
+    """Parse a time string to float seconds.
 
-    - If already HH:MM:SS:FF, return as-is.
-    - If HH:MM:SS.mmm, convert to HH:MM:SS:FF at 30 fps (fallback).
-    - If bare integer, convert to timecode at 30 fps.
+    Supports:
+    - HH:MM:SS.mmm (milliseconds, preferred)
+    - HH:MM:SS:FF (frames — frame component is discarded)
+    - HH:MM:SS.mmm with colons
+    - Bare integer (frame count — treated as seconds)
 
-    .. note::
-        The 30 fps fallback for ambiguous formats is used only during
-        XML *loading*; when building projects programmatically all
-        timecodes should be passed as HH:MM:SS:FF directly.
+    Args:
+        s: Time string
+
+    Returns:
+        Seconds as float
     """
     if ":" not in s:
         try:
-            return str(Timecode.from_frames(int(s), 30.0))
+            return float(s)
         except ValueError:
-            return s
+            return 0.0
+
     parts = s.split(":")
-    if len(parts) == 4:
-        return s
-    if len(parts) == 3 and "." in parts[2]:
+    if len(parts) == 4 and "." in parts[3]:
+        # HH:MM:SS.mmm with colons
         try:
             hours = int(parts[0])
             minutes = int(parts[1])
-            seconds = float(parts[2])
-            total_frames = int(round((hours * 3600 + minutes * 60 + seconds) * 30.0))
-            return str(Timecode.from_frames(total_frames, 30.0))
+            sec_parts = parts[3].split(".")
+            seconds = int(sec_parts[0])
+            ms = int(sec_parts[1].ljust(3, "0")[:3])
+            return hours * 3600 + minutes * 60 + seconds + ms / 1000.0
         except (ValueError, IndexError):
             pass
-    return s
+
+    if len(parts) == 3 and "." in parts[2]:
+        # HH:MM:SS.mmm format
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            sec_parts = parts[2].split(".")
+            seconds = int(sec_parts[0])
+            ms = int(sec_parts[1].ljust(3, "0")[:3])
+            return hours * 3600 + minutes * 60 + seconds + ms / 1000.0
+        except (ValueError, IndexError):
+            pass
+
+    if len(parts) == 4:
+        # HH:MM:SS:FF format — ignore frame component
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = int(parts[2])
+            return hours * 3600 + minutes * 60 + seconds
+        except ValueError:
+            pass
+
+    if len(parts) == 3:
+        # HH:MM:SS
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = int(parts[2])
+            return hours * 3600 + minutes * 60 + seconds
+        except ValueError:
+            pass
+
+    return 0.0
 
 
 class Blank:
     """Represents a blank space in a playlist.
 
     Attributes:
-        length: Duration as a timecode string (HH:MM:SS:FF)
+        length: Duration in seconds
     """
 
-    def __init__(self, length: str) -> None:
+    def __init__(self, length: float) -> None:
         """Initialize a Blank.
 
         Args:
-            length: Duration as a timecode string (HH:MM:SS:FF)
+            length: Duration in seconds
         """
         self.length = length
 
     @classmethod
-    def from_timecode(cls, timecode: str, fps: float = 30.0) -> "Blank":
-        """Create a blank from timecode duration.
-
-        Args:
-            timecode: Duration in HH:MM:SS:FF format
-            fps: Frames per second (not used for storage, only validation)
-
-        Returns:
-            Blank object
-        """
-        _ = Timecode.from_string(timecode, fps)
-        return cls(length=timecode)
-
-    @classmethod
-    def from_seconds(cls, seconds: float, fps: float = 30.0) -> "Blank":
+    def from_seconds(cls, seconds: float) -> "Blank":
         """Create a blank from a duration in seconds.
 
         Args:
             seconds: Duration in seconds
-            fps: Frames per second
 
         Returns:
             Blank object
         """
-        return cls(length=str(Timecode.from_seconds(seconds, fps)))
+        return cls(length=seconds)
 
-    def get_duration_frames(self, fps: float) -> int:
-        """Get the blank duration in frames.
-
-        Args:
-            fps: Frames per second
+    def get_duration(self) -> float:
+        """Get the blank duration in seconds.
 
         Returns:
-            Duration in frames
+            Duration in seconds
         """
-        return Timecode.from_string(self.length, fps).to_frames()
+        return self.length
 
     def to_xml(self, fps: float = 30.0) -> ET.Element:
         """Generate XML element for this blank.
 
         The MLT XML format requires ``length`` in frames, so the
-        stored timecode is converted using the given FPS.
+        stored seconds value is converted using the given FPS.
 
         Args:
-            fps: Frames per second for timecode-to-frame conversion
+            fps: Frames per second for seconds-to-frames conversion
 
         Returns:
             XML Element representing the blank
         """
-        frames = Timecode.from_string(self.length, fps).to_frames()
+        frames = int(round(self.length * fps))
         return ET.Element("blank", {"length": str(frames)})
 
     @classmethod
-    def from_xml(cls, elem: ET.Element) -> "Blank":
+    def from_xml(cls, elem: ET.Element, fps: float = 30.0) -> "Blank":
         """Parse a blank from XML element.
 
         Args:
             elem: XML Element representing a blank
+            fps: Frames per second for frame-to-seconds conversion
 
         Returns:
             Blank object
         """
         frame_len = int(elem.get("length", "0"))
-        return cls(length=str(Timecode.from_frames(frame_len, 30.0)))
+        seconds = frame_len / fps
+        return cls(length=seconds)
 
     def __repr__(self) -> str:
         return f"Blank(length={self.length})"

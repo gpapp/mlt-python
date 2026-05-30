@@ -75,8 +75,8 @@ class TestSubtitleTrack:
         track = SubtitleTrack(
             resource="subtitles.srt",
             track=0,
-            start_frame=0,
-            end_frame=1000,
+            start_time=0.0,
+            end_time=33.0,
         )
         assert track.resource == "subtitles.srt"
         assert track.track == 0

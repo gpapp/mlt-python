@@ -2,13 +2,13 @@
 
 Represents a playlist in MLT, which acts as a track in the timeline.
 A playlist contains clips (entries) and blanks in a specific order.
-All time positions are stored as timecode strings (HH:MM:SS:FF).
+All time positions are stored as float seconds internally.
 """
 
 from typing import Optional
 from xml.etree import ElementTree as ET
 
-from .clip import Clip, Blank
+from .clip import Clip, Blank, _parse_time_str
 from .timecode import Timecode
 
 
@@ -48,43 +48,38 @@ class Playlist:
     def add_clip(
         self,
         producer_id: str,
-        in_point: str | None = None,
-        out_point: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
+        in_point: float | None = None,
+        out_point: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
         position: int | None = None,
-        fps: float = 30.0,
+        fps: float = 25.0,
     ) -> Clip:
-        """Add a clip to the playlist using timecodes.
+        """Add a clip to the playlist using float seconds.
 
         Exactly one of ``out_point``, ``end``, or ``duration`` must be
         provided (or ``out_point`` alone for an open-ended clip).
 
         Args:
             producer_id: ID of the producer to reference
-            in_point: Start timecode (HH:MM:SS:FF). Defaults to ``00:00:00:00``.
-            out_point: End timecode (HH:MM:SS:FF), **inclusive**.
-            end: End timecode (HH:MM:SS:FF), **exclusive** (1 frame beyond last).
-            duration: Duration timecode (HH:MM:SS:FF).
+            in_point: Start time in seconds. Defaults to 0.0.
+            out_point: End time in seconds, **inclusive**.
+            end: End time in seconds, **exclusive**.
+            duration: Duration in seconds.
             position: Insert position (default: append to end).
-            fps: Frames per second (required when ``end`` or ``duration`` is used).
+            fps: Video frame rate for inclusive-out conversion (default 25.0).
 
         Returns:
             The created Clip object
         """
         if in_point is None:
-            in_point = "00:00:00:00"
+            in_point = 0.0
 
         if out_point is None:
             if end is not None:
-                end_f = Timecode.from_string(end, fps).to_frames()
-                out_f = max(0, end_f - 1)
-                out_point = str(Timecode.from_frames(out_f, fps))
+                out_point = max(0.0, end - 1.0 / fps)
             elif duration is not None:
-                in_f = Timecode.from_string(in_point, fps).to_frames()
-                dur_f = Timecode.from_string(duration, fps).to_frames()
-                out_f = in_f + dur_f - 1
-                out_point = str(Timecode.from_frames(out_f, fps))
+                out_point = in_point + duration - 1.0 / fps
 
         clip = Clip(producer_id, in_point=in_point, out_point=out_point)
 
@@ -97,22 +92,19 @@ class Playlist:
 
     def add_blank(
         self,
-        timecode: str,
+        duration: float,
         position: int | None = None,
-        fps: float = 30.0,
     ) -> Blank:
-        """Add a blank space to the playlist using a timecode duration.
+        """Add a blank space to the playlist.
 
         Args:
-            timecode: Duration in HH:MM:SS:FF format
+            duration: Duration in seconds
             position: Insert position (default: append)
-            fps: Frames per second (for validation only)
 
         Returns:
             The created Blank object
         """
-        _ = Timecode.from_string(timecode, fps)  # validate
-        blank = Blank(timecode)
+        blank = Blank(duration)
         if position is None:
             self.clips.append(blank)
         else:
@@ -136,36 +128,21 @@ class Playlist:
         """Remove all clips from the playlist."""
         self.clips.clear()
 
-    def get_duration_frames(self, fps: float = 30.0) -> int:
-        """Get the total duration of the playlist in frames.
-
-        Args:
-            fps: Frames per second for timecode conversion
+    def get_duration(self) -> float:
+        """Get the total duration of the playlist in seconds.
 
         Returns:
-            Total duration in frames
+            Total duration in seconds
         """
-        duration = 0
+        duration = 0.0
         for item in self.clips:
             if isinstance(item, Clip):
-                if item.in_point is not None and item.out_point is not None:
-                    in_f = Timecode.from_string(item.in_point, fps).to_frames()
-                    out_f = Timecode.from_string(item.out_point, fps).to_frames()
-                    duration += out_f - in_f + 1
+                d = item.get_duration()
+                if d is not None:
+                    duration += d
             elif isinstance(item, Blank):
-                duration += Timecode.from_string(item.length, fps).to_frames()
+                duration += item.length
         return duration
-
-    def get_duration_timecode(self, fps: float) -> str:
-        """Get the total duration as a timecode string.
-
-        Args:
-            fps: Frames per second
-
-        Returns:
-            Duration in HH:MM:SS:FF format
-        """
-        return str(Timecode.from_frames(self.get_duration_frames(fps), fps))
 
     def get_property(self, name: str, default: str | None = None) -> str | None:
         """Get an MLT property value.
@@ -201,7 +178,7 @@ class Playlist:
 
         Args:
             producer_to_chain: Optional mapping from producer ID to chain ID.
-                             If provided, clip references will use chain IDs.
+                              If provided, clip references will use chain IDs.
             fps: Frames per second (passed to ``Blank.to_xml`` for blank
                  length conversion).
 
@@ -226,11 +203,12 @@ class Playlist:
         return elem
 
     @classmethod
-    def from_xml(cls, elem: ET.Element) -> "Playlist":
+    def from_xml(cls, elem: ET.Element, fps: float = 30.0) -> "Playlist":
         """Parse a playlist from XML element.
 
         Args:
             elem: XML Element representing a playlist
+            fps: Frames per second for blank length frame-to-seconds conversion
 
         Returns:
             Playlist object
@@ -247,7 +225,7 @@ class Playlist:
             elif child.tag == "entry":
                 clips.append(Clip.from_xml(child))
             elif child.tag == "blank":
-                clips.append(Blank.from_xml(child))
+                clips.append(Blank.from_xml(child, fps=fps))
 
         return cls(id=id, clips=clips, properties=properties)
 

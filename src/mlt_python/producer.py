@@ -47,7 +47,7 @@ class Producer:
             resource: File path or resource string
             mlt_service: MLT service type (default: "avformat" for media files)
             properties: Additional MLT properties
-            in_point: Optional start frame
+            in_point: Optional start frame (MLT uses frames internally)
             out_point: Optional end frame
         """
         self.id = id
@@ -171,7 +171,7 @@ class Producer:
         """Generate XML element as a chain (for Kdenlive bin).
 
         Args:
-            fps: Frames per second for timestamp conversion
+            fps: Frames per second for frame-to-seconds timestamp conversion
             chain_id: Optional chain ID (auto-generated if None)
             kdenlive_mode: Kdenlive mode ('audio', 'video', or None)
 
@@ -179,8 +179,6 @@ class Producer:
             XML Element representing the producer as a chain element
         """
         resource = self.properties.get("resource", "")
-        is_audio_only = False
-        is_video_only = False
 
         if chain_id is None:
             chain_id = f"chain{self.id}" if not self.id.startswith("chain") else self.id
@@ -192,10 +190,7 @@ class Producer:
                 frames = int(length)
                 if frames < 2147483647:  # Skip absurd default
                     total_seconds = frames / fps
-                    hours = int(total_seconds // 3600)
-                    minutes = int((total_seconds % 3600) // 60)
-                    seconds = total_seconds % 60
-                    out_point = f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
+                    out_point = str(Timecode.from_seconds(total_seconds))
             except ValueError:
                 pass
 
@@ -264,7 +259,7 @@ class Producer:
                # Video/AV flags depend on the specific split track mode in Kdenlive
                 test_audio = "1" if kdenlive_mode == "video" or kdenlive_mode is None else "0"
                 test_image = "0" if kdenlive_mode == "video" or kdenlive_mode is None else "1"
-                
+
                 if not any(p.get("name") == "set.test_audio" for p in chain.findall("property")):
                     ET.SubElement(chain, "property", {"name": "set.test_audio"}).text = test_audio
                 if not any(p.get("name") == "set.test_image" for p in chain.findall("property")):
@@ -323,51 +318,43 @@ class Producer:
         """
         id = elem.get("id", "")
         mlt_service = elem.get("mlt_service", "avformat")
-        
+
         # Handle both frame numbers and timecode/timestamp strings for in/out points
         in_str = elem.get("in")
         out_str = elem.get("out")
-        
+
         in_point = None
         out_point = None
-        
+
         if in_str:
             if ":" in in_str:
-                # Timecode or timestamp format - try to parse
+                # Timecode or timestamp format - convert to seconds then to frames
                 try:
-                    # Try HH:MM:SS:FF format first
-                    tc = Timecode.from_string(in_str, 30.0)
-                    in_point = tc.to_frames()
+                    tc = Timecode.from_string(in_str)
+                    in_point = int(round(tc.to_seconds() * 30.0))  # Assume 30 fps
                 except ValueError:
-                    # Try HH:MM:SS.mmm format
-                    parts = in_str.split(":")
-                    if len(parts) == 3:
-                        try:
-                            seconds = float(parts[2])
-                            total_seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + seconds
-                            in_point = int(total_seconds * 30.0)  # Assume 30 fps
-                        except (ValueError, IndexError):
-                            pass
+                    try:
+                        seconds = _parse_time_str(in_str)
+                        in_point = int(round(seconds * 30.0))
+                    except (ValueError, IndexError):
+                        pass
             else:
                 try:
                     in_point = int(in_str)
                 except ValueError:
                     pass
-        
+
         if out_str:
             if ":" in out_str:
                 try:
-                    tc = Timecode.from_string(out_str, 30.0)
-                    out_point = tc.to_frames()
+                    tc = Timecode.from_string(out_str)
+                    out_point = int(round(tc.to_seconds() * 30.0))  # Assume 30 fps
                 except ValueError:
-                    parts = out_str.split(":")
-                    if len(parts) == 3:
-                        try:
-                            seconds = float(parts[2])
-                            total_seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + seconds
-                            out_point = int(total_seconds * 30.0)
-                        except (ValueError, IndexError):
-                            pass
+                    try:
+                        seconds = _parse_time_str(out_str)
+                        out_point = int(round(seconds * 30.0))
+                    except (ValueError, IndexError):
+                        pass
             else:
                 try:
                     out_point = int(out_str)
@@ -395,3 +382,50 @@ class Producer:
 
     def __repr__(self) -> str:
         return f"Producer(id='{self.id}', resource='{self.resource}')"
+
+
+def _parse_time_str(s: str) -> float:
+    """Parse a time string to float seconds."""
+    if ":" not in s:
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+    parts = s.split(":")
+    if len(parts) == 4 and "." in parts[3]:
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            sec_parts = parts[3].split(".")
+            seconds = int(sec_parts[0])
+            ms = int(sec_parts[1].ljust(3, "0")[:3])
+            return hours * 3600 + minutes * 60 + seconds + ms / 1000.0
+        except (ValueError, IndexError):
+            pass
+    if len(parts) == 3 and "." in parts[2]:
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            sec_parts = parts[2].split(".")
+            seconds = int(sec_parts[0])
+            ms = int(sec_parts[1].ljust(3, "0")[:3])
+            return hours * 3600 + minutes * 60 + seconds + ms / 1000.0
+        except (ValueError, IndexError):
+            pass
+    if len(parts) == 4:
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = int(parts[2])
+            return hours * 3600 + minutes * 60 + seconds
+        except ValueError:
+            pass
+    if len(parts) == 3:
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = int(parts[2])
+            return hours * 3600 + minutes * 60 + seconds
+        except ValueError:
+            pass
+    return 0.0

@@ -10,6 +10,7 @@ from typing import Optional
 from xml.etree import ElementTree as ET
 
 from .timecode import Timecode
+from .clip import _parse_time_str
 
 
 @dataclass
@@ -30,39 +31,39 @@ class SubtitleItem:
         return f"{self.index}\n{self.start_time} --> {self.end_time}\n{self.text}\n"
 
     @property
-    def start_ms(self) -> int:
-        """Get start time in milliseconds.
+    def start_seconds(self) -> float:
+        """Get start time in seconds.
 
         Returns:
-            Start time in ms
+            Start time in seconds
         """
-        return self._timecode_to_ms(self.start_time)
+        return self._timecode_to_seconds(self.start_time)
 
     @property
-    def end_ms(self) -> int:
-        """Get end time in milliseconds.
+    def end_seconds(self) -> float:
+        """Get end time in seconds.
 
         Returns:
-            End time in ms
+            End time in seconds
         """
-        return self._timecode_to_ms(self.end_time)
+        return self._timecode_to_seconds(self.end_time)
 
     @staticmethod
-    def _timecode_to_ms(timecode: str) -> int:
-        """Convert HH:MM:SS,mmm to milliseconds.
+    def _timecode_to_seconds(timecode: str) -> float:
+        """Convert HH:MM:SS,mmm to seconds.
 
         Args:
             timecode: Time in HH:MM:SS,mmm format
 
         Returns:
-            Time in milliseconds
+            Time in seconds
         """
         parts = timecode.replace(",", ":").split(":")
         hours = int(parts[0])
         minutes = int(parts[1])
         seconds = int(parts[2])
         milliseconds = int(parts[3])
-        return ((hours * 3600 + minutes * 60 + seconds) * 1000) + milliseconds
+        return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000.0
 
 
 class SubtitleTrack:
@@ -74,8 +75,8 @@ class SubtitleTrack:
     Attributes:
         resource: Path to the SRT file
         track: Track index this subtitle applies to
-        start_timecode: Start timecode (HH:MM:SS:FF) for subtitle display
-        end_timecode: End timecode (HH:MM:SS:FF) for subtitle display (optional)
+        start_time: Start time in seconds for subtitle display
+        end_time: End time in seconds for subtitle display (optional)
         properties: Additional filter properties (geometry, font, etc.)
     """
 
@@ -83,8 +84,8 @@ class SubtitleTrack:
         self,
         resource: str,
         track: int = 0,
-        start_timecode: str | None = None,
-        end_timecode: str | None = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
         properties: dict[str, str] | None = None,
     ) -> None:
         """Initialize a SubtitleTrack.
@@ -92,14 +93,14 @@ class SubtitleTrack:
         Args:
             resource: Path to SRT file
             track: Track index
-            start_timecode: Start timecode (HH:MM:SS:FF) (optional)
-            end_timecode: End timecode (HH:MM:SS:FF) (optional)
+            start_time: Start time in seconds (optional)
+            end_time: End time in seconds (optional)
             properties: Additional filter properties
         """
         self.resource = resource
         self.track = track
-        self.start_timecode = start_timecode
-        self.end_timecode = end_timecode
+        self.start_time = start_time
+        self.end_time = end_time
         self.properties: dict[str, str] = properties or {}
 
         # Set defaults for subtitle filter
@@ -121,23 +122,21 @@ class SubtitleTrack:
         cls,
         srt_file: str,
         track: int = 0,
-        start: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
-        fps: float = 30.0,
+        start: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
         font_family: str = "Sans",
         font_size: str = "48",
         font_colour: str = "0xffffffff",
     ) -> "SubtitleTrack":
-        """Create a subtitle track using timecode format.
+        """Create a subtitle track using float seconds.
 
         Args:
             srt_file: Path to SRT file
             track: Track index
-            start: Start timecode (HH:MM:SS:FF)
-            end: End timecode (HH:MM:SS:FF), exclusive
-            duration: Duration timecode (alternative to end)
-            fps: Frames per second
+            start: Start time in seconds
+            end: End time in seconds, exclusive
+            duration: Duration in seconds (alternative to end)
             font_family: Font family
             font_size: Font size
             font_colour: Font colour (hex with alpha)
@@ -145,18 +144,13 @@ class SubtitleTrack:
         Returns:
             SubtitleTrack object
         """
-        start_timecode = start
-        end_timecode = None
+        start_time = start
+        end_time = None
 
         if end is not None:
-            end_tc = Timecode.from_string(end, fps)
-            end_frames = end_tc.to_frames() - 1  # MLT out is inclusive
-            end_timecode = str(Timecode.from_frames(end_frames, fps))
-        elif duration is not None and start_timecode is not None:
-            start_tc = Timecode.from_string(start_timecode, fps)
-            dur_tc = Timecode.from_string(duration, fps)
-            out_frames = start_tc.to_frames() + dur_tc.to_frames() - 1
-            end_timecode = str(Timecode.from_frames(out_frames, fps))
+            end_time = end
+        elif duration is not None and start_time is not None:
+            end_time = start_time + duration
 
         properties = {
             "family": font_family,
@@ -167,8 +161,8 @@ class SubtitleTrack:
         return cls(
             resource=srt_file,
             track=track,
-            start_timecode=start_timecode,
-            end_timecode=end_timecode,
+            start_time=start_time,
+            end_time=end_time,
             properties=properties,
         )
 
@@ -181,10 +175,10 @@ class SubtitleTrack:
         attrs: dict[str, str] = {"mlt_service": "subtitle"}
         if self.track is not None:
             attrs["track"] = str(self.track)
-        if self.start_timecode is not None:
-            attrs["in"] = self.start_timecode
-        if self.end_timecode is not None:
-            attrs["out"] = self.end_timecode
+        if self.start_time is not None:
+            attrs["in"] = str(Timecode.from_seconds(self.start_time))
+        if self.end_time is not None:
+            attrs["out"] = str(Timecode.from_seconds(self.end_time))
 
         elem = ET.Element("filter", attrs)
 

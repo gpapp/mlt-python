@@ -2,7 +2,7 @@
 
 Main class for creating, modifying, and saving MLT XML files
 compatible with Kdenlive. Provides a high-level API that uses
-timecodes (HH:MM:SS:FF) for all operations.
+float seconds for all time-based operations.
 """
 
 from pathlib import Path
@@ -28,9 +28,8 @@ class MLTProject:
     """Main project class for MLT XML manipulation.
 
     This class provides the primary API for creating and modifying
-    MLT XML files. It handles timecode-to-frame conversion and
-    provides methods to add/modify/delete media, tracks, clips,
-    filters, transitions, and subtitles.
+    MLT XML files. All time values are float seconds internally;
+    conversion to timecode strings happens only at XML serialization.
 
     Attributes:
         profile: Video profile (fps, resolution, etc.)
@@ -201,19 +200,19 @@ class MLTProject:
         self,
         track_id: str,
         producer_id: str,
-        start: str,
-        end: str | None = None,
-        duration: str | None = None,
+        start: float,
+        end: float | None = None,
+        duration: float | None = None,
         position: int | None = None,
     ) -> Clip:
-        """Add a clip to a track using timecodes.
+        """Add a clip to a track using float seconds.
 
         Args:
             track_id: Target track/playlist ID
             producer_id: Producer ID to reference
-            start: Start timecode (HH:MM:SS:FF) on the timeline
-            end: End timecode (HH:MM:SS:FF), exclusive
-            duration: Duration timecode (alternative to end)
+            start: Start time in seconds on the timeline
+            end: End time in seconds, exclusive
+            duration: Duration in seconds (alternative to end)
             position: Position in track (default: append)
 
         Returns:
@@ -230,14 +229,9 @@ class MLTProject:
         out_point = None
 
         if end is not None:
-            end_tc = Timecode.from_string(end, self.profile.fps)
-            out_frames = end_tc.to_frames() - 1  # MLT out is inclusive
-            out_point = str(Timecode.from_frames(max(0, out_frames), self.profile.fps))
+            out_point = max(0.0, end - 1.0 / self.profile.fps)
         elif duration is not None:
-            start_tc = Timecode.from_string(start, self.profile.fps)
-            dur_tc = Timecode.from_string(duration, self.profile.fps)
-            out_frames = start_tc.to_frames() + dur_tc.to_frames() - 1
-            out_point = str(Timecode.from_frames(out_frames, self.profile.fps))
+            out_point = start + duration - 1.0 / self.profile.fps
 
         clip = Clip(
             producer_id=producer_id,
@@ -275,9 +269,9 @@ class MLTProject:
         self,
         mlt_service: str,
         track: int | None = None,
-        start: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
+        start: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
         properties: dict[str, str] | None = None,
     ) -> Filter:
         """Add a filter to the project.
@@ -285,9 +279,9 @@ class MLTProject:
         Args:
             mlt_service: MLT filter service name
             track: Track index (None = all tracks)
-            start: Start timecode
-            end: End timecode
-            duration: Duration timecode
+            start: Start time in seconds
+            end: End time in seconds
+            duration: Duration in seconds
             properties: Additional filter properties
 
         Returns:
@@ -298,7 +292,6 @@ class MLTProject:
             start=start,
             end=end,
             duration=duration,
-            fps=self.profile.fps,
             track=track,
             properties=properties,
         )
@@ -309,18 +302,18 @@ class MLTProject:
         self,
         srt_file: str,
         track: int = 0,
-        start: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
+        start: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
     ) -> Filter:
         """Add subtitles from an SRT file.
 
         Args:
             srt_file: Path to SRT file
             track: Track index
-            start: Start timecode
-            end: End timecode
-            duration: Duration timecode
+            start: Start time in seconds
+            end: End time in seconds
+            duration: Duration in seconds
 
         Returns:
             The created subtitle Filter object
@@ -331,7 +324,6 @@ class MLTProject:
             start=start,
             end=end,
             duration=duration,
-            fps=self.profile.fps,
         )
         self.filters.append(subtitle_filter)
         return subtitle_filter
@@ -341,9 +333,9 @@ class MLTProject:
         mlt_service: str,
         a_track: int = 0,
         b_track: int = 1,
-        start: str | None = None,
-        end: str | None = None,
-        duration: str | None = None,
+        start: float | None = None,
+        end: float | None = None,
+        duration: float | None = None,
         properties: dict[str, str] | None = None,
     ) -> Transition:
         """Add a transition between tracks.
@@ -352,9 +344,9 @@ class MLTProject:
             mlt_service: MLT transition service name
             a_track: Source track index
             b_track: Destination track index
-            start: Start timecode
-            end: End timecode
-            duration: Duration timecode
+            start: Start time in seconds
+            end: End time in seconds
+            duration: Duration in seconds
             properties: Additional transition properties
 
         Returns:
@@ -367,7 +359,6 @@ class MLTProject:
             start=start,
             end=end,
             duration=duration,
-            fps=self.profile.fps,
             properties=properties,
         )
         self.transitions.append(transition)
@@ -379,19 +370,19 @@ class MLTProject:
 
     def add_marker(
         self,
-        pos: str,
+        pos: float,
         comment: str = "Marker",
         marker_type: int = 0,
-        duration: str | None = None,
+        duration: float | None = None,
         producer_id: str | None = None,
     ) -> Marker:
         """Add a marker to the timeline (guide) or to a specific clip.
 
         Args:
-            pos: Position timecode (HH:MM:SS:FF).
+            pos: Position in seconds.
             comment: Marker label.
-            marker_type: Colour category 0-8 (0=purple, 1=blue, …).
-            duration: Optional region duration timecode. ``None`` = point.
+            marker_type: Colour category 0-8 (0=purple, 1=blue, ...).
+            duration: Optional region duration in seconds. ``None`` = point.
             producer_id: If given, attach as a clip marker on that producer.
                          Otherwise the marker becomes a sequence/timeline guide.
 
@@ -404,12 +395,11 @@ class MLTProject:
         if producer_id is not None and producer_id not in self.producers:
             raise KeyError(f"Producer not found: {producer_id}")
 
-        marker = Marker.from_timecode(
+        marker = Marker(
             pos=pos,
-            fps=self.profile.fps,
             comment=comment,
             marker_type=marker_type,
-            duration=duration,
+            duration=duration or 0.0,
         )
 
         if producer_id is not None:
@@ -421,27 +411,27 @@ class MLTProject:
 
     def remove_marker(
         self,
-        pos: str,
+        pos: float,
         producer_id: str | None = None,
+        tolerance: float = 0.01,
     ) -> bool:
         """Remove a marker at a given position.
 
         Args:
-            pos: Position timecode (HH:MM:SS:FF) to match.
+            pos: Position in seconds to match.
             producer_id: If given, remove from clip markers; else from guides.
+            tolerance: Tolerance in seconds for position matching.
 
         Returns:
             ``True`` if a marker was removed, ``False`` if none matched.
         """
-        target_frame = Timecode.from_string(pos, self.profile.fps).to_frames()
-
         if producer_id is not None:
             lst = self.clip_markers.get(producer_id, [])
         else:
             lst = self.sequence_markers
 
         for i, m in enumerate(lst):
-            if m.pos == target_frame:
+            if abs(m.pos - pos) < tolerance:
                 lst.pop(i)
                 return True
         return False
@@ -478,61 +468,41 @@ class MLTProject:
         else:
             self.sequence_markers.clear()
 
+    def get_duration_seconds(self) -> float:
+        """Get the total duration of the project in seconds.
+
+        Returns:
+            Total duration in seconds
+        """
+        max_duration = 0.0
+        for playlist in self.playlists.values():
+            duration = playlist.get_duration()
+            max_duration = max(max_duration, duration)
+        return max_duration
+
     def get_duration_frames(self) -> int:
         """Get the total duration of the project in frames.
 
         Returns:
             Total duration in frames
         """
-        max_duration = 0
-        fps = self.profile.fps
-        for playlist in self.playlists.values():
-            duration_frames = playlist.get_duration_frames(fps)
-            max_duration = max(max_duration, duration_frames)
-        return max_duration
-
-    def get_duration_timecode(self, fps: float | None = None) -> str:
-        """Get the total duration as a timecode string.
-
-        Args:
-            fps: Optional frames per second (uses profile FPS if None)
-
-        Returns:
-            Duration in HH:MM:SS:FF format
-        """
-        fps = fps or self.profile.fps
-        return str(Timecode.from_frames(self.get_duration_frames(), fps))
+        return int(round(self.get_duration_seconds() * self.profile.fps))
 
     def _seconds_to_timestamp(self, producer: Producer, default_seconds: int) -> str:
-
         """Convert producer length to timestamp format (HH:MM:SS.mmm)."""
         length_str = producer.get_property("length", str(default_seconds * 30))
         try:
             frames = int(length_str)
             fps = self.profile.fps
             total_seconds = frames / fps
-            hours = int(total_seconds // 3600)
-            minutes = int((total_seconds % 3600) // 60)
-            seconds = total_seconds % 60
-            return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
+            return str(Timecode.from_seconds(total_seconds))
         except ValueError:
             return "00:00:00.000"
 
     def _get_timeline_duration(self) -> str:
         """Get the duration of the timeline in timestamp format."""
-        max_frames = 0
-        fps = self.profile.fps
-        for playlist in self.playlists.values():
-            for clip in playlist.clips:
-                if isinstance(clip, Clip) and clip.out_point is not None:
-                    cf = Timecode.from_string(clip.out_point, fps).to_frames()
-                    if cf > max_frames:
-                        max_frames = cf
-        total_seconds = max_frames / fps if max_frames > 0 else 0
-        hours = int(total_seconds // 3600)
-        minutes = int((total_seconds % 3600) // 60)
-        seconds = total_seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
+        seconds = self.get_duration_seconds()
+        return str(Timecode.from_seconds(seconds))
 
     def to_xml(
         self,
@@ -554,6 +524,8 @@ class MLTProject:
         self._tractor_counter = 0
         self._playlist_counter = 0
         self._transition_counter = 0
+
+        fps = self.profile.fps
 
         # Build root attributes - order matters! LC_NUMERIC first like reference
         root_attrs: dict[str, str] = {}
@@ -592,16 +564,16 @@ class MLTProject:
                     kdenlive_mode = "video"
                 # If both are present, it's a combined AV clip, kdenlive_mode can be None
 
-                chain_elem = producer.to_xml_chain(fps=self.profile.fps, chain_id=chain_id, kdenlive_mode=kdenlive_mode)
-                # Store the producer ID for loading                
-                prop = ET.SubElement(chain_elem, "property", {"name": "kdenlive:originalprod"}) # Use ET from current scope
+                chain_elem = producer.to_xml_chain(fps=fps, chain_id=chain_id, kdenlive_mode=kdenlive_mode)
+                # Store the producer ID for loading
+                prop = ET.SubElement(chain_elem, "property", {"name": "kdenlive:originalprod"})
                 prop.text = producer.id
                 # Attach clip markers if any
                 clip_mkrs = self.clip_markers.get(producer.id, [])
                 if clip_mkrs:
                     from xml.etree import ElementTree as _ET
                     prop = _ET.SubElement(chain_elem, "property", {"name": "kdenlive:markers"})
-                    prop.text = markers_to_json(clip_mkrs)
+                    prop.text = markers_to_json(clip_mkrs, fps=fps)
                 root.append(chain_elem)
                 self._chain_counter += 1
         else:
@@ -622,13 +594,17 @@ class MLTProject:
         # Add playlists if not in kdenlive format
         if not kdenlive_format:
             for playlist in self.playlists.values():
-                root.append(playlist.to_xml(fps=self.profile.fps))
+                root.append(playlist.to_xml(fps=fps))
 
         # Add black color producer (required by Kdenlive as base track)
         if kdenlive_format:
-            main_tractor_out = self.get_duration_timecode() if self.playlists else "00:05:00.000"
+            main_tractor_out = self.get_duration_seconds()
+            # Convert total duration to inclusive last-frame time for MLT XML
+            total_frames = int(round(main_tractor_out * self.profile.fps))
+            inclusive_out = max(0.0, (total_frames - 1) / self.profile.fps) if total_frames > 0 else 0.0
+            main_tractor_out_tc = str(Timecode.from_seconds(inclusive_out)) if main_tractor_out > 0 else "00:05:00.000"
             sequence_uuid = self.sequence_uuid
-            black_producer = ET.SubElement(root, "producer", {"id": "producer0", "in": "00:00:00.000", "out": main_tractor_out})
+            black_producer = ET.SubElement(root, "producer", {"id": "producer0", "in": "00:00:00.000", "out": main_tractor_out_tc})
 
             ET.SubElement(black_producer, "property", {"name": "length"}).text = "2147483647"
             ET.SubElement(black_producer, "property", {"name": "eof"}).text = "continue"
@@ -706,7 +682,7 @@ class MLTProject:
             prop.text = "640"
             prop = ET.SubElement(main_bin, "property", {"name": "kdenlive:docproperties.externalproxyparams"})
             prop.text = ""
-            
+
             guides_categories = """[
         {
         "color": "#9b59b6",
@@ -768,15 +744,12 @@ class MLTProject:
                         out_frames = int(length)
                     except ValueError:
                         pass
-                
+
                 out_tc = "00:00:00.000"
                 if out_frames > 0:
-                    total_seconds = out_frames / self.profile.fps
-                    hours = int(total_seconds // 3600)
-                    minutes = int((total_seconds % 3600) // 60)
-                    seconds = total_seconds % 60
-                    out_tc = f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
-                
+                    total_seconds = out_frames / fps
+                    out_tc = str(Timecode.from_seconds(total_seconds))
+
                 ET.SubElement(main_bin, "entry", {
                     "in": "00:00:00.000",
                     "out": out_tc,
@@ -786,7 +759,7 @@ class MLTProject:
             # Add sequence tractor entry
             ET.SubElement(main_bin, "entry", {
                 "in": "00:00:00.000",
-                "out": main_tractor_out,
+                "out": main_tractor_out_tc,
                 "producer": sequence_uuid
             })
 
@@ -804,7 +777,7 @@ class MLTProject:
                 playlist.properties.pop("kdenlive:track_type", None)
 
                 # Add main playlist with chain references and FPS
-                root.append(playlist.to_xml(producer_to_chain, fps=self.profile.fps))
+                root.append(playlist.to_xml(producer_to_chain, fps=fps))
                 playlist_elem = root.find(f"playlist[@id='{playlist.id}']")
                 if playlist_elem is not None and track_type == "audio":
                     prop = ET.SubElement(playlist_elem, "property", {"name": "kdenlive:audio_track"})
@@ -899,7 +872,7 @@ class MLTProject:
             main_tractor_attrs: dict[str, str] = {
                 "id": sequence_uuid,
                 "in": "00:00:00.000",
-                "out": main_tractor_out
+                "out": main_tractor_out_tc
             }
 
             main_tractor = ET.SubElement(root, "tractor", main_tractor_attrs)
@@ -923,7 +896,7 @@ class MLTProject:
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:control_uuid"})
             prop.text = sequence_uuid
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:duration"})
-            prop.text = self.get_duration_timecode()
+            prop.text = str(Timecode.from_seconds(self.get_duration_seconds()))
             max_duration = self.get_duration_frames()
             maxduration_str = str(max_duration) if max_duration > 0 else "1"
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:maxduration"})
@@ -969,13 +942,13 @@ class MLTProject:
             prop.text = self.kdenlive.get_doc_property("sequenceproperties.groups", "[\n]")
             prop = ET.SubElement(main_tractor, "property", {"name": "kdenlive:sequenceproperties.guides"})
             if self.sequence_markers:
-                prop.text = markers_to_json(self.sequence_markers)
+                prop.text = markers_to_json(self.sequence_markers, fps=fps)
             else:
                 prop.text = "[\n]"
 
             # Add tracks and transitions to main tractor
             ET.SubElement(main_tractor, "track", {"producer": "producer0"})
-            
+
             # Keep track of track tractor IDs for references
             track_ids = list(self.playlists.keys())
             for i, track_id in enumerate(track_ids):
@@ -986,7 +959,7 @@ class MLTProject:
             for i, track_id in enumerate(track_ids):
                 track_type = self.playlists[track_id].properties.get("kdenlive:track_type", "video")
                 service = "mix" if track_type == "audio" else "qtblend"
-                
+
                 transition = ET.SubElement(main_tractor, "transition", {"id": f"transition{i}"})
                 ET.SubElement(transition, "property", {"name": "a_track"}).text = "0"
                 ET.SubElement(transition, "property", {"name": "b_track"}).text = str(i + 1)
@@ -994,7 +967,7 @@ class MLTProject:
                 ET.SubElement(transition, "property", {"name": "kdenlive_id"}).text = service
                 ET.SubElement(transition, "property", {"name": "internal_added"}).text = "237"
                 ET.SubElement(transition, "property", {"name": "always_active"}).text = "1"
-                
+
                 if service == "mix":
                     ET.SubElement(transition, "property", {"name": "accepts_blanks"}).text = "1"
                     ET.SubElement(transition, "property", {"name": "sum"}).text = "1"
@@ -1041,35 +1014,35 @@ class MLTProject:
             project_tractor = ET.SubElement(root, "tractor", {
                 "id": f"tractor{self._tractor_counter}",
                 "in": "00:00:00.000",
-                "out": main_tractor_out
+                "out": main_tractor_out_tc
             })
             self._tractor_counter += 1
             prop = ET.SubElement(project_tractor, "property", {"name": "kdenlive:projectTractor"})
             prop.text = "1"
             ET.SubElement(project_tractor, "track", {
                 "in": "00:00:00.000",
-                "out": main_tractor_out,
+                "out": main_tractor_out_tc,
                 "producer": sequence_uuid
             })
         else:
             # Standard MLT format
             # Producers are already added in the first loop
-            
+
             # Add playlists
             for playlist in self.playlists.values():
                 root.append(playlist.to_xml())
-                
+
             # If we have filters or transitions, wrap in a tractor
             if self.filters or self.transitions:
                 tractor = ET.SubElement(root, "tractor", {"id": "tractor0"})
                 # Add tracks (all playlists)
                 for playlist_id in self.playlists:
                     ET.SubElement(tractor, "track", {"producer": playlist_id})
-                
+
                 # Add filters
                 for filter_obj in self.filters:
                     tractor.append(filter_obj.to_xml())
-                
+
                 # Add transitions
                 for transition_obj in self.transitions:
                     tractor.append(transition_obj.to_xml())
@@ -1133,10 +1106,11 @@ class MLTProject:
             profile = Profile.hd1080_30()
 
         project = cls(profile=profile, version=version)
+        fps = profile.fps
 
         # Check if this is Kdenlive format (has chain elements)
         has_chains = len(root.findall("chain")) > 0
-        
+
         if has_chains:
             # Kdenlive format: load producers from chain elements
             for chain_elem in root.findall("chain"):
@@ -1146,11 +1120,11 @@ class MLTProject:
                     if prop.get("name") == "kdenlive:originalprod":
                         producer_id = prop.text
                         break
-                
+
                 if producer_id is None:
                     # Try to get ID from kdenlive:id or use chain ID
                     producer_id = chain_elem.get("id", "")
-                
+
                 # Create producer from chain element
                 producer = Producer.from_xml(chain_elem)
                 if producer_id:
@@ -1163,7 +1137,7 @@ class MLTProject:
                 project.producers[producer.id] = producer
 
         for elem in root.findall("playlist"):
-            playlist = Playlist.from_xml(elem)
+            playlist = Playlist.from_xml(elem, fps=fps)
             # Set track_type based on kdenlive:audio_track property
             if playlist.properties.get("kdenlive:audio_track") == "1":
                 playlist.set_property("kdenlive:track_type", "audio")
@@ -1192,7 +1166,7 @@ class MLTProject:
             guides_json = properties.get("kdenlive:sequenceproperties.guides", "")
             if guides_json:
                 try:
-                    project.sequence_markers = markers_from_json(guides_json)
+                    project.sequence_markers = markers_from_json(guides_json, fps=fps)
                 except Exception:
                     pass  # Invalid JSON, skip
 
@@ -1206,19 +1180,19 @@ class MLTProject:
                 if prop.get("name") == "kdenlive:originalprod":
                     producer_id = prop.text
                     break
-            
+
             if producer_id is None:
                 # Try to find by chain mapping (chain0 -> first producer, etc.)
                 # This is a simplification - in reality we'd need a proper mapping
                 pass
-            
+
             # Check for clip markers property
             for prop in chain_elem.findall("property"):
                 if prop.get("name") == "kdenlive:markers":
                     markers_json = prop.text or ""
                     if markers_json:
                         try:
-                            markers = markers_from_json(markers_json)
+                            markers = markers_from_json(markers_json, fps=fps)
                             if producer_id:
                                 project.clip_markers[producer_id] = markers
                         except Exception:
